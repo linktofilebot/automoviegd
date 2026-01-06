@@ -18,7 +18,7 @@ from google.oauth2 import service_account
 
 # --- ২. অ্যাপ কনফিগারেশন ---
 app = Flask(__name__)
-BOT_TOKEN = "8589295170:AAHSsqlS6Zp_c-xsIAqZOv6zNiU2m_U6cro"
+BOT_TOKEN = "8589295170:AAEwMMNn9NqEu1KnoWxPhVBMc1ttbCpMqgI"
 app.secret_key = os.environ.get("SECRET_KEY", "moviebox_ultra_master_2026_premium")
 
 MONGO_URI = "mongodb+srv://mesohas358:mesohas358@cluster0.6kxy1vc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
