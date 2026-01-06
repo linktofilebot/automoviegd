@@ -3,13 +3,13 @@ from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO, emit
 from pymongo import MongoClient
 
-# অ্যাপ সেটআপ
+# --- অ্যাপ সেটআপ ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'super-secret-key-123'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # --- মোঙ্গোডিবি (MongoDB) কানেকশন ---
-# এখানে আপনার MongoDB Atlas থেকে পাওয়া লিঙ্কটি দিন
+# এখানে আপনার আসল MongoDB URI টি দিবেন
 MONGO_URI = "mongodb+srv://user:pass@cluster.mongodb.net/myDatabase?retryWrites=true&w=majority" 
 
 try:
@@ -32,7 +32,7 @@ html_content = """
         :root { --primary: #6c5ce7; --success: #2ed573; --danger: #ff4757; --dark: #2f3542; }
         body { font-family: 'Segoe UI', sans-serif; background: #f1f2f6; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
         .card { background: white; width: 95%; max-width: 400px; padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; }
-        input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #edeff2; border-radius: 12px; font-size: 16px; transition: 0.3s; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #edeff2; border-radius: 12px; font-size: 16px; box-sizing: border-box; transition: 0.3s; }
         input:focus { border-color: var(--primary); outline: none; }
         button { width: 100%; padding: 12px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; transition: 0.3s; margin-top: 10px; color: white; font-size: 16px; }
         .btn-login { background: var(--primary); }
@@ -44,6 +44,7 @@ html_content = """
         video { width: 100%; background: #000; border-radius: 12px; transform: scaleX(-1); }
         .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 1000; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; }
         .status-dot { height: 10px; width: 10px; background-color: var(--success); border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .link-text { color: var(--primary); cursor: pointer; text-decoration: underline; display: block; margin-top: 15px; font-size: 14px; }
     </style>
 </head>
 <body>
@@ -52,12 +53,22 @@ html_content = """
     <audio id="audioRing" src="https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3" loop></audio>
     <audio id="videoRing" src="https://www.soundjay.com/phone/phone-calling-1.mp3" loop></audio>
 
-    <!-- লগইন স্ক্রিন -->
-    <div class="card" id="loginBox">
-        <h2 style="color: var(--primary);">ভিডিও কলিং</h2>
-        <p style="color: #777;">আপনার নাম্বার দিয়ে শুরু করুন</p>
-        <input type="number" id="phoneInput" placeholder="ফোন নাম্বার (যেমন: 017...)">
+    <!-- রেজিস্ট্রেশন স্ক্রিন (নতুন যোগ করা) -->
+    <div class="card" id="registerBox">
+        <h2 style="color: var(--primary);">একাউন্ট তৈরি করুন</h2>
+        <input type="number" id="regPhone" placeholder="মোবাইল নাম্বার">
+        <input type="password" id="regPin" placeholder="৫ ডিজিটের কোড দিন" maxlength="5">
+        <button class="btn-login" onclick="registerAccount()">একাউন্ট খুলুন</button>
+        <span class="link-text" onclick="showLogin()">ইতিমধ্যে একাউন্ট আছে? লগইন করুন</span>
+    </div>
+
+    <!-- লগইন স্ক্রিন (আপডেটেড) -->
+    <div class="card hidden" id="loginBox">
+        <h2 style="color: var(--primary);">লগইন করুন</h2>
+        <input type="number" id="loginPhone" placeholder="মোবাইল নাম্বার">
+        <input type="password" id="loginPin" placeholder="৫ ডিজিটের কোড দিন">
         <button class="btn-login" onclick="login()">লগইন করুন</button>
+        <span class="link-text" onclick="showRegister()">নতুন একাউন্ট তৈরি করুন</span>
     </div>
 
     <!-- মেইন ড্যাশবোর্ড -->
@@ -71,7 +82,6 @@ html_content = """
             <button class="btn-audio" onclick="initiateCall('audio')">অডিও কল</button>
         </div>
 
-        <!-- ভিডিও এরিয়া -->
         <div id="callInterface" class="hidden">
             <p id="callStatus" style="font-weight: bold; margin-top: 15px;">সংযুক্ত হচ্ছে...</p>
             <div class="video-box">
@@ -82,7 +92,7 @@ html_content = """
         </div>
     </div>
 
-    <!-- কল আসার পপআপ -->
+    <!-- ইনকামিং কল পপআপ -->
     <div id="incomingPopup" class="overlay hidden">
         <h1 id="callerIdHead">017XXXXXXXX</h1>
         <p id="callTypeHead">ভিডিও কল দিচ্ছে...</p>
@@ -97,17 +107,49 @@ html_content = """
         let myId, localStream, peerConnection, currentOffer;
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-        // ১. লগইন
-        async function login() {
-            myId = document.getElementById('phoneInput').value;
-            if (myId.length < 5) return alert("সঠিক নাম্বার দিন");
-            socket.emit('register_user', myId);
-            document.getElementById('loginBox').classList.add('hidden');
-            document.getElementById('dashboard').classList.remove('hidden');
-            document.getElementById('myIdDisplay').innerText = myId;
+        function showLogin() {
+            document.getElementById('registerBox').classList.add('hidden');
+            document.getElementById('loginBox').classList.remove('hidden');
         }
 
-        // ২. কল শুরু করা
+        function showRegister() {
+            document.getElementById('loginBox').classList.add('hidden');
+            document.getElementById('registerBox').classList.remove('hidden');
+        }
+
+        // ১. একাউন্ট তৈরি (Backend call)
+        function registerAccount() {
+            const phone = document.getElementById('regPhone').value;
+            const pin = document.getElementById('regPin').value;
+            if (phone.length < 10 || pin.length !== 5) return alert("সঠিক নাম্বার ও ৫ ডিজিটের কোড দিন");
+            socket.emit('register_new_user', { phone, pin });
+        }
+
+        socket.on('register_response', data => {
+            alert(data.message);
+            if (data.status === 'success') showLogin();
+        });
+
+        // ২. লগইন (Backend call)
+        function login() {
+            const phone = document.getElementById('loginPhone').value;
+            const pin = document.getElementById('loginPin').value;
+            if (!phone || !pin) return alert("নাম্বার এবং পিন উভয়ই দিন");
+            socket.emit('login_user', { phone, pin });
+        }
+
+        socket.on('login_response', data => {
+            if (data.status === 'success') {
+                myId = data.phone;
+                document.getElementById('loginBox').classList.add('hidden');
+                document.getElementById('dashboard').classList.remove('hidden');
+                document.getElementById('myIdDisplay').innerText = myId;
+            } else {
+                alert(data.message);
+            }
+        });
+
+        // ৩. কল শুরু করা (WebRTC)
         async function initiateCall(type) {
             const target = document.getElementById('searchId').value;
             if (!target || target === myId) return alert("সঠিক নাম্বার দিন");
@@ -133,7 +175,7 @@ html_content = """
             socket.emit('signal_data', { to: target, offer: offer, from: myId, type: type });
         }
 
-        // ৩. ইনকামিং সিগন্যাল
+        // ৪. সিগন্যালিং রিসিভ
         socket.on('signal_data', async (data) => {
             if (data.offer) {
                 currentOffer = data;
@@ -149,7 +191,7 @@ html_content = """
             }
         });
 
-        // ৪. কল রিসিভ
+        // ৫. কল রিসিভ
         async function acceptCall() {
             document.getElementById('videoRing').pause();
             document.getElementById('audioRing').pause();
@@ -193,14 +235,40 @@ def home():
     return render_template_string(html_content)
 
 # --- ব্যাকএন্ড সকেট লজিক ---
-@socketio.on('register_user')
-def register(phone):
-    # MongoDB-তে ইউজার আপডেট
-    users_collection.update_one(
-        {"phone": phone},
-        {"$set": {"socket_id": request.sid, "status": "online"}},
-        upsert=True
-    )
+
+@socketio.on('register_new_user')
+def register_new_user(data):
+    phone = data.get('phone')
+    pin = data.get('pin')
+    
+    # চেক করা হচ্ছে একাউন্ট আগে থেকে আছে কি না
+    existing_user = users_collection.find_one({"phone": phone})
+    if existing_user:
+        emit('register_response', {'status': 'error', 'message': 'এই নাম্বার দিয়ে ইতিমধ্যে একাউন্ট খোলা আছে!'})
+    else:
+        users_collection.insert_one({
+            "phone": phone,
+            "pin": pin,
+            "socket_id": request.sid,
+            "status": "offline"
+        })
+        emit('register_response', {'status': 'success', 'message': 'একাউন্ট তৈরি সফল হয়েছে! এখন লগইন করুন।'})
+
+@socketio.on('login_user')
+def login_user(data):
+    phone = data.get('phone')
+    pin = data.get('pin')
+    
+    # ফোন ও পিন ম্যাচ করানো
+    user = users_collection.find_one({"phone": phone, "pin": pin})
+    if user:
+        users_collection.update_one(
+            {"phone": phone},
+            {"$set": {"socket_id": request.sid, "status": "online"}}
+        )
+        emit('login_response', {'status': 'success', 'phone': phone})
+    else:
+        emit('login_response', {'status': 'error', 'message': 'ভুল নাম্বার অথবা পিন!'})
 
 @socketio.on('signal_data')
 def signal(data):
@@ -217,4 +285,4 @@ def disconnect():
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
-    socketio.run(app, host='0.0.0.0', port=port)
+    socketio.run(app, host='0.0.0.0', port=port, debug=True)
