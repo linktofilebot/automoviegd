@@ -1,366 +1,277 @@
 import os
-import requests
-import tempfile
-import threading
+import asyncio
 import json
-import time
-from datetime import datetime
-from flask import Flask, render_template_string, request, redirect, url_for, session, jsonify
-from pymongo import MongoClient
-from bson.objectid import ObjectId
-import telebot
-from telebot import types
+from fastapi import FastAPI, Request, Form, Query
+from fastapi.responses import HTMLResponse, RedirectResponse
+from pyrogram import Client, filters
+from motor.motor_asyncio import AsyncIOMotorClient
+from bson import ObjectId
+import uvicorn
 
-# --- ১. গুগল ড্রাইভ লাইব্রেরি ---
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
-from google.oauth2 import service_account
+# --- কনফিগারেশন (Render-এর Environment Variables থেকে আসবে) ---
+API_ID = int(os.getenv("API_ID", "123456"))
+API_HASH = os.getenv("API_HASH", "your_api_hash")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
+MONGO_URL = os.getenv("MONGO_URL", "your_mongodb_url")
+CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-100123456789"))
 
-# --- ২. অ্যাপ কনফিগারেশন ---
-app = Flask(__name__)
-BOT_TOKEN = "8589295170:AAEwMMNn9NqEu1KnoWxPhVBMc1ttbCpMqgI"
-app.secret_key = os.environ.get("SECRET_KEY", "moviebox_ultra_master_2026_premium")
+# --- অ্যাপ ও ডাটাবেস ইনিশিয়ালাইজ ---
+app = FastAPI()
+db_client = AsyncIOMotorClient(MONGO_URL)
+db = db_client['ultimate_movie_db']
+content_col = db['content']
+settings_col = db['settings']
+category_col = db['categories']
+ott_col = db['otts']
 
-MONGO_URI = "mongodb+srv://mesohas358:mesohas358@cluster0.6kxy1vc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
-TMDB_API_KEY = "7dc544d9253bccc3cfecc1c677f69819"
-SITE_URL = os.environ.get("SITE_URL", "https://moviehallbd71.onrender.com")
+bot = Client("movie_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN, in_memory=True)
 
-bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
-
-# MongoDB কানেকশন
-try:
-    client = MongoClient(MONGO_URI)
-    db = client['moviebox_v5_db']
-    movies_col, episodes_col = db['movies'], db['episodes']
-    categories_col, languages_col = db['categories'], db['languages']
-    ott_col, settings_col, comments_col = db['ott_platforms'], db['settings'], db['comments']
-    gdrive_col = db['gdrive_accounts']
-except Exception as e:
-    print(f"Database Connection Error: {e}")
-
-# এডমিন ক্রেডেনশিয়াল লোড
-def get_admin_creds():
-    creds = settings_col.find_one({"type": "admin_creds"})
-    if not creds:
-        creds = {"type": "admin_creds", "user": "admin", "pass": "12345"}
-        settings_col.insert_one(creds)
-    return creds
-
-# সাইট সেটিংস লোড
-def get_config():
-    conf = settings_col.find_one({"type": "config"})
+# --- গ্লোবাল সেটিংস লোডার ---
+async def get_config():
+    conf = await settings_col.find_one({"type": "global"})
     if not conf:
-        conf = {"type": "config", "site_name": "MOVIEBOX PRO", "ad_link": "https://ad-link.com", "ad_click_limit": 2, "notice_text": "Welcome to MovieBox Pro!", "notice_color": "#00ff00", "popunder": "", "native_ad": "", "banner_ad": "", "socialbar_ad": ""}
-        settings_col.insert_one(conf)
+        conf = {
+            "type": "global", 
+            "site_name": "NEON CINEMA", 
+            "notice": "Welcome to our premium movie portal!", 
+            "popunder": "", 
+            "ad_step_urls": "", 
+            "total_steps": 0
+        }
+        await settings_col.insert_one(conf)
     return conf
 
-# ড্রাইভ সার্ভিস পাওয়ার ফাংশন
-def get_active_drive_service():
-    active_drive = gdrive_col.find_one({"status": "active"})
-    if active_drive:
-        try:
-            info = json.loads(active_drive['json_data'])
-            creds = service_account.Credentials.from_service_account_info(info, scopes=['https://www.googleapis.com/auth/drive'])
-            return build('drive', 'v3', credentials=creds), active_drive['folder_id']
-        except: return None, None
-    return None, None
-
-# --- ৩. প্রিমিয়াম লাইটিং CSS ---
+# --- নিয়ন লাইটিং ও প্রফেশনাল CSS ---
 CSS = """
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
 <style>
-    :root { --main: #e50914; --glow: rgba(229, 9, 20, 0.7); --bg: #050505; --card: #121212; --text: #ffffff; --neon: #00f2ff; }
-    * { box-sizing: border-box; margin: 0; padding: 0; outline: none; }
-    body { font-family: 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); overflow-x: hidden; }
-    .nav { background: rgba(0,0,0,0.95); padding: 18px; display: flex; justify-content: center; border-bottom: 2px solid var(--main); position: sticky; top: 0; z-index: 1000; box-shadow: 0 0 25px var(--glow); backdrop-filter: blur(10px); }
-    .logo { font-size: 30px; font-weight: 900; text-decoration: none; text-transform: uppercase; background: linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000); background-size: 400% auto; -webkit-background-clip: text; background-clip: text; color: transparent; animation: rainbow 5s linear infinite; letter-spacing: 3px; }
-    @keyframes rainbow { to { background-position: 400% center; } }
-    .container { max-width: 1400px; margin: auto; padding: 20px; }
-    .search-box { display: flex; align-items: center; background: rgba(255,255,255,0.05); border-radius: 30px; padding: 5px 25px; border: 1px solid #333; width: 100%; max-width: 600px; margin: 0 auto 30px; transition: 0.4s; }
-    .search-box input { background: transparent; border: none; color: #fff; width: 100%; padding: 12px; font-size: 16px; }
-    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 20px; }
-    @media (min-width: 600px) { .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 30px; } }
-    .card { background: var(--card); border-radius: 18px; overflow: hidden; border: 1px solid #222; text-decoration: none; color: #fff; transition: 0.5s; display: block; position: relative; }
-    .card:hover { transform: scale(1.05); border-color: var(--neon); box-shadow: 0 15px 35px rgba(0,242,255,0.2); }
-    .card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; }
-    .card-title { padding: 15px; text-align: center; font-size: 14px; background: linear-gradient(0deg, #000, transparent); position: absolute; bottom: 0; width: 100%; }
-    .stat-card { background: #0a0a0a; padding: 30px; border-radius: 20px; text-align: center; border: 1px solid #222; }
-    .btn-main { background: linear-gradient(45deg, var(--main), #ff4d4d); color: #fff; border: none; padding: 15px 30px; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; text-align: center; display: inline-block; text-decoration: none; text-transform: uppercase; }
-    .drw { position: fixed; top: 0; right: -100%; width: 320px; height: 100%; background: #050505; border-left: 1px solid #333; transition: 0.5s; z-index: 2000; padding-top: 80px; }
-    .drw.active { right: 0; }
-    .drw span, .drw a { padding: 20px 30px; display: block; color: #eee; text-decoration: none; border-bottom: 1px solid #111; cursor: pointer; }
-    .sec-box { display: none; background: #080808; padding: 25px; border-radius: 20px; margin-top: 30px; border: 1px solid #1a1a1a; }
-    iframe, video { width: 100%; border-radius: 15px; background: #000; aspect-ratio: 16/9; }
-    input, select, textarea { width: 100%; padding: 12px; margin: 10px 0; background: #111; border: 1px solid #333; color: #fff; border-radius: 8px; }
-    .ep-item { padding: 12px; background: #151515; margin-top: 10px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; border-left: 4px solid var(--neon); }
+    :root { --primary: #00f2ff; --secondary: #7000ff; --bg: #05070a; --card: #10141d; --text: #ffffff; }
+    body { font-family: 'Poppins', sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 0; }
+    
+    /* Lighting UI Components */
+    .neon-text { color: var(--primary); text-shadow: 0 0 10px var(--primary), 0 0 20px var(--primary); }
+    .neon-border { border: 1px solid var(--primary); box-shadow: 0 0 15px rgba(0, 242, 255, 0.2); }
+    .header { background: rgba(16, 20, 29, 0.9); backdrop-filter: blur(10px); padding: 15px; text-align: center; border-bottom: 2px solid var(--primary); position: sticky; top:0; z-index:100; }
+    .notice { background: linear-gradient(90deg, var(--primary), var(--secondary)); color: #000; padding: 10px; text-align: center; font-weight: bold; font-size: 14px; }
+    
+    .container { max-width: 1200px; margin: auto; padding: 15px; }
+    .btn { background: linear-gradient(45deg, var(--primary), var(--secondary)); color: white; padding: 10px 20px; border-radius: 50px; text-decoration: none; font-weight: bold; border: none; cursor: pointer; display: inline-block; transition: 0.3s; box-shadow: 0 0 10px rgba(0, 242, 255, 0.5); }
+    .btn:hover { transform: scale(1.05); box-shadow: 0 0 20px var(--primary); }
+    
+    /* Grid & Cards */
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 20px; margin-top: 20px; }
+    @media (max-width: 600px) { .grid { grid-template-columns: 1fr 1fr; gap: 10px; } }
+    .card { background: var(--card); border-radius: 15px; overflow: hidden; border: 1px solid #222; transition: 0.3s; text-align: center; }
+    .card:hover { border-color: var(--primary); transform: translateY(-5px); }
+    .card img { width: 100%; height: 260px; object-fit: cover; }
+    
+    /* Details Page Lighting */
+    .details-box { display: flex; flex-wrap: wrap; gap: 30px; background: #10141d; padding: 30px; border-radius: 20px; border: 1px solid var(--primary); box-shadow: 0 0 30px rgba(0, 242, 255, 0.1); }
+    .details-poster { width: 300px; border-radius: 15px; box-shadow: 0 0 20px var(--primary); }
+    .info-panel { flex: 1; min-width: 300px; }
+    .tag { background: rgba(0, 242, 255, 0.1); color: var(--primary); padding: 5px 12px; border-radius: 5px; border: 1px solid var(--primary); font-size: 12px; margin-right: 5px; }
+
+    /* Admin UI */
+    .admin-menu { background: #161b22; padding: 20px; border-radius: 15px; margin-bottom: 25px; border-left: 5px solid var(--primary); }
+    input, textarea, select { width: 100%; padding: 12px; margin: 10px 0; background: #0d1117; color: white; border: 1px solid #30363d; border-radius: 8px; }
 </style>
 """
 
-# --- ৪. ফ্রন্টএন্ড রাউটস ---
+# --- রুট: হোমপেজ ---
+@app.get("/", response_class=HTMLResponse)
+async def home(q: str = Query(None), cat: str = Query(None), ott: str = Query(None)):
+    conf = await get_config()
+    otts = await ott_col.find().to_list(100)
+    cats = await category_col.find().to_list(100)
+    
+    query = {}
+    if q: query["title"] = {"$regex": q, "$options": "i"}
+    if cat: query["category"] = cat
+    if ott: query["ott_id"] = ott
+    
+    items = await content_col.find(query).sort("_id", -1).to_list(40)
+    
+    html = f"<html><head><title>{conf['site_name']}</title><meta name='viewport' content='width=device-width, initial-scale=1.0'>{CSS}{conf['popunder']}</head><body>"
+    html += f"<div class='header'><h1 class='neon-text'>⚡ {conf['site_name']}</h1></div>"
+    if conf['notice']: html += f"<div class='notice'>📢 {conf['notice']}</div>"
+    
+    html += "<div class='container'>"
+    
+    # OTT & Categories
+    html += "<div style='display:flex; gap:15px; overflow-x:auto; padding-bottom:15px;'>"
+    for o in otts:
+        html += f"<a href='/?ott={o['_id']}' style='text-align:center; text-decoration:none; color:white;'><img src='{o['logo']}' style='width:60px; height:60px; border-radius:50%; border:2px solid var(--primary);'><br><small>{o['name']}</small></a>"
+    html += "</div>"
+    
+    html += f"<form style='display:flex; gap:10px;'><input name='q' placeholder='Search movies, series, actors...' value='{q or ''}'><button class='btn'>🔍</button></form>"
+    
+    # Movie Grid
+    html += "<div class='grid'>"
+    for i in items:
+        poster = i.get('poster') or "https://via.placeholder.com/300x450"
+        html += f"""<div class='card'>
+            <img src='{poster}'>
+            <div style='padding:12px;'>
+                <h4 style='margin:5px 0; font-size:14px;'>{i['title']}</h4>
+                <a href='/movie/{i['_id']}' class='btn' style='font-size:11px; width:100%; box-sizing:border-box;'>WATCH NOW</a>
+            </div>
+        </div>"""
+    html += "</div></div></body></html>"
+    return html
 
-@app.route('/', methods=['GET', 'POST'])
-def index():
-    # এরর ফিক্স: POST রিকোয়েস্ট আসলে যেন ৪০৫ না আসে
-    if request.method == 'POST':
-        return "OK", 200
-        
-    query = request.args.get('q')
-    s = get_config()
-    otts, cats = list(ott_col.find()), list(categories_col.find())
-    if query:
-        movies = list(movies_col.find({"$or": [{"title": {"$regex": query, "$options": "i"}}, {"ott": {"$regex": query, "$options": "i"}}]}).sort("_id", -1))
+# --- রুট: ডিটেইলস পেজ (সব তথ্যসহ) ---
+@app.get("/movie/{id}", response_class=HTMLResponse)
+async def details(id: str):
+    conf = await get_config()
+    item = await content_col.find_one({"_id": ObjectId(id)})
+    if not item: return "Content Not Found"
+    
+    html = f"<html><head><title>{item['title']}</title><meta name='viewport' content='width=device-width, initial-scale=1.0'>{CSS}</head><body>"
+    html += f"<div class='header'><h1 class='neon-text'>{conf['site_name']}</h1></div>"
+    html += f"<div class='container'><div class='details-box'>"
+    
+    # Poster & Trailer
+    html += "<div>"
+    html += f"<img src='{item.get('poster')}' class='details-poster'>"
+    if item.get('trailer'):
+        html += f"<h3 class='neon-text' style='margin-top:20px;'>🎬 Trailer</h3><iframe width='300' height='180' src='https://www.youtube.com/embed/{item['trailer'].split('v=')[-1]}' frameborder='0' allowfullscreen style='border-radius:10px; border:1px solid var(--primary);'></iframe>"
+    html += "</div>"
+    
+    # Info Panel
+    html += "<div class='info-panel'>"
+    html += f"<h1 class='neon-text' style='margin-top:0;'>{item['title']}</h1>"
+    html += f"<p><span class='tag'>⭐ {item.get('rating', 'N/A')}</span> <span class='tag'>🌐 {item.get('language', 'N/A')}</span> <span class='tag'>💎 {item.get('quality', 'HD')}</span></p>"
+    html += f"<p><b>🎭 Actors:</b> {item.get('actors', 'N/A')}</p>"
+    html += f"<p style='color:#ccc;'><b>📝 Story:</b> {item.get('description', 'No description available.')}</p>"
+    
+    # Download Links
+    html += "<h2 class='neon-text' style='margin-top:40px;'>🚀 DOWNLOAD LINKS</h2>"
+    if item['type'] == 'movie':
+        for idx, q in enumerate(item.get('qualities', [])):
+            html += f"<div style='margin-bottom:10px;'><a href='/verify/{id}/movie/{idx}/0' class='btn' style='width:100%; text-align:center;'>{q['quality']} - Server Link</a></div>"
     else:
-        movies = list(movies_col.find().sort("_id", -1))
-    return render_template_string(HOME_HTML, movies=movies, otts=otts, cats=cats, query=query, s=s)
-
-HOME_HTML = CSS + """
-{{ s.popunder|safe }}
-<nav class="nav"><a href="/" class="logo">{{ s.site_name }}</a></nav>
-<div class="container">
-    <div style="color:{{s.notice_color}}; text-align:center; margin-bottom:25px; font-weight:bold;">{{s.notice_text}}</div>
-    <form action="/" method="GET" class="search-box">
-        <input type="text" name="q" placeholder="Search movies & series..." value="{{ query or '' }}">
-        <button type="submit" style="background:none; border:none; color:var(--neon); padding-right:15px;"><i class="fas fa-search"></i></button>
-    </form>
-    <div class="grid">
-        {% for m in movies %}
-        <a href="/content/{{ m._id }}" class="card"><img src="{{ m.poster }}"><div class="card-title">{{ m.title }}</div></a>
-        {% endfor %}
-    </div>
-</div>
-"""
-
-@app.route('/content/<id>')
-def content_detail(id):
-    m = movies_col.find_one({"_id": ObjectId(id)})
-    if not m: return redirect('/')
+        for s_idx, s in enumerate(item.get('seasons', [])):
+            html += f"<h3 style='border-bottom:1px solid var(--primary); padding-bottom:5px;'>Season {s['s_num']}</h3>"
+            for e_idx, ep in enumerate(s['episodes']):
+                html += f"<div style='margin-bottom:10px;'><b>Ep {ep['e_num']}</b>: "
+                for q_idx, q in enumerate(ep['qualities']):
+                    html += f"<a href='/verify/{id}/series/{s_idx}_{e_idx}_{q_idx}/0' class='btn' style='padding:5px 12px; font-size:12px; margin-left:5px;'>{q['quality']}</a>"
+                html += "</div>"
     
-    # এপিসোড লোড করা (সিরিজের জন্য)
-    eps = list(episodes_col.find({"series_id": str(id)}).sort([("season", 1), ("episode", 1)]))
+    html += "</div></div>"
+    html += "<br><a href='/' class='btn' style='background:#333; box-shadow:none;'>⬅️ BACK TO HOME</a></div></body></html>"
+    return html
+
+# --- রুট: অ্যাড ভেরিফিকেশন সিস্টেম ---
+@app.get("/verify/{id}/{ctype}/{cidx}/{step}", response_class=HTMLResponse)
+async def verify(id: str, ctype: str, cidx: str, step: int):
+    conf = await get_config()
+    total = int(conf['total_steps'])
+    urls = conf['ad_step_urls'].split(",")
     
-    # বর্তমান ভিডিও ইউআরএল (যদি কেউ এপিসোড সিলেক্ট করে)
-    target_url = request.args.get('vid', m['video_url'])
+    if step >= total:
+        item = await content_col.find_one({"_id": ObjectId(id)})
+        if ctype == 'movie': final = item['qualities'][int(cidx)]['link']
+        else:
+            s_i, e_i, q_i = map(int, cidx.split("_"))
+            final = item['seasons'][s_i]['episodes'][e_i]['qualities'][q_i]['link']
+        return RedirectResponse(url=final)
+
+    current_ad = urls[step].strip() if step < len(urls) else "#"
+    return f"""<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>{CSS}</head>
+    <body><div class='container' style='text-align:center; padding-top:100px;'>
+    <div class='details-box' style='display:inline-block;'>
+        <h2 class='neon-text'>🔓 Step {step+1} of {total}</h2>
+        <p>Your link is almost ready! Click continue to verify.</p>
+        <a href="{current_ad}" target="_blank" onclick="window.location.href='/verify/{id}/{ctype}/{cidx}/{step+1}'" class='btn' style='font-size:20px;'>CONTINUE ➡️</a>
+    </div></div></body></html>"""
+
+# --- রুট: ৩-মেনু অ্যাডমিন প্যানেল (Emojis & Lighting) ---
+@app.get("/admin", response_class=HTMLResponse)
+async def admin():
+    conf = await get_config()
+    otts = await ott_col.find().to_list(100)
+    cats = await category_col.find().to_list(100)
     
-    embed_url = target_url
-    if "drive.google.com" in embed_url:
-        try:
-            if "/file/d/" in embed_url:
-                file_id = embed_url.split("/d/")[1].split("/")[0]
-            elif "id=" in embed_url:
-                file_id = embed_url.split("id=")[1].split("&")[0]
-            embed_url = f"https://drive.google.com/file/d/{file_id}/preview"
-        except: pass
-        
-    return render_template_string(DETAIL_HTML, m=m, eps=eps, embed_url=embed_url, is_drive=("drive.google.com" in target_url), s=get_config())
-
-DETAIL_HTML = CSS + """
-<nav class="nav"><a href="/" class="logo">{{ s.site_name }}</a></nav>
-<div class="container" style="max-width:1000px;">
-    {% if is_drive %}
-    <iframe src="{{ embed_url }}" allow="autoplay"></iframe>
-    {% else %}
-    <video id="vBox" controls poster="{{ m.backdrop }}"><source src="{{ embed_url }}" type="video/mp4"></video>
-    {% endif %}
+    html = f"<html><head><title>Admin Panel</title>{CSS}</head><body><div class='container'>"
+    html += "<h1 class='neon-text'>🛡️ MASTER DASHBOARD</h1>"
     
-    <h1 style="margin-top:20px;">{{ m.title }} ({{ m.year }})</h1>
-    <p style="color:#aaa;">Language: {{ m.language }}</p>
+    # মেনু ১: জেনারেল সেটিংস
+    html += f"""<div class='admin-menu'><h3>⚙️ ১. Global Settings</h3>
+    <form action='/admin/settings' method='post'>
+        <label>Site Name:</label><input name='site_name' value='{conf['site_name']}'>
+        <label>Notice Bar:</label><textarea name='notice'>{conf['notice']}</textarea>
+        <label>Total Ad Steps:</label><input type='number' name='total_steps' value='{conf['total_steps']}'>
+        <label>Ad URLs (Comma Separated):</label><textarea name='ad_urls'>{conf['ad_step_urls']}</textarea>
+        <label>Popunder Code:</label><textarea name='popunder'>{conf['popunder']}</textarea>
+        <button class='btn'>✅ Update Settings</button>
+    </form></div>"""
 
-    {% if eps %}
-    <div style="margin-top:30px;">
-        <h3 style="color:var(--neon);">Episodes</h3>
-        {% for e in eps %}
-        <a href="/content/{{ m._id }}?vid={{ e.video_url }}" class="ep-item" style="text-decoration:none; color:#fff;">
-            <span>S{{ e.season }} E{{ e.episode }}</span>
-            <i class="fas fa-play-circle"></i>
-        </a>
-        {% endfor %}
-    </div>
-    {% endif %}
+    # মেনু ২: ওটিটি ও ক্যাটাগরি
+    html += """<div class='admin-menu'><h3>📺 ২. Media & Labels</h3>
+    <div style='display:grid; grid-template-columns:1fr 1fr; gap:20px;'>
+        <div><h4>Add OTT Provider</h4><form action='/admin/add_ott' method='post'><input name='name' placeholder='Name'><input name='logo' placeholder='Logo URL'><button class='btn'>➕ Add</button></form></div>
+        <div><h4>Add Category</h4><form action='/admin/add_cat' method='post'><input name='name' placeholder='Category Name'><button class='btn'>➕ Add</button></form></div>
+    </div></div>"""
 
-    <a href="{{ s.ad_link }}" target="_blank" class="btn-main" style="margin-top:30px;">📥 DOWNLOAD NOW</a>
-</div>
-"""
+    # মেনু ৩: কন্টেন্ট আপলোডার
+    html += f"""<div class='admin-menu'><h3>🎬 ৩. Content Manager</h3>
+    <form action='/admin/add_content' method='post'>
+        <input name='title' placeholder='Title' required>
+        <input name='poster' placeholder='Poster URL'>
+        <input name='rating' placeholder='Rating (e.g. 8.4)'>
+        <input name='lang' placeholder='Language'>
+        <input name='actors' placeholder='Actors Name'>
+        <input name='trailer' placeholder='Trailer Link'>
+        <input name='quality' placeholder='Quality (4K, BluRay)'>
+        <textarea name='desc' placeholder='Description'></textarea>
+        <select name='type'><option value='movie'>Movie</option><option value='series'>Series</option></select>
+        <select name='cat'>{"".join([f"<option value='{c['name']}'>{c['name']}</option>" for c in cats])}</select>
+        <select name='ott'>{"".join([f"<option value='{o['_id']}'>{o['name']}</option>" for o in otts])}</select>
+        <textarea name='json' placeholder='JSON Data (Links)'></textarea>
+        <button class='btn'>🚀 Publish Now</button>
+    </form></div>"""
 
-# --- ৫. অ্যাডমিন প্যানেল ---
+    html += "</div></body></html>"
+    return html
 
-@app.route('/admin')
-def admin():
-    if not session.get('auth'):
-        return render_template_string(CSS + """<div class="container"><form action="/login" method="POST" class="sec-box" style="display:block; max-width:400px; margin:100px auto;"><h2 style="text-align:center;">ADMIN LOGIN</h2><input type="text" name="u" placeholder="User"><input type="password" name="p" placeholder="Pass"><button class="btn-main">LOGIN</button></form></div>""")
-    
-    movies = list(movies_col.find().sort("_id", -1))
-    gdrives = list(gdrive_col.find())
-    counts = {"movies": movies_col.count_documents({"type": "movie"}), "series": movies_col.count_documents({"type": "series"})}
-    return render_template_string(ADMIN_HTML, movies=movies, gdrives=gdrives, counts=counts, s=get_config(), a=get_admin_creds())
+# --- অ্যাডমিন পোস্ট হ্যান্ডলারস ---
+@app.post("/admin/settings")
+async def save_settings(site_name: str=Form(...), notice: str=Form(...), total_steps: int=Form(...), ad_urls: str=Form(...), popunder: str=Form("")):
+    await settings_col.update_one({"type": "global"}, {"$set": {"site_name": site_name, "notice": notice, "total_steps": total_steps, "ad_step_urls": ad_urls, "popunder": popunder}})
+    return RedirectResponse(url="/admin", status_code=303)
 
-ADMIN_HTML = CSS + """
-<nav class="nav"><a href="/admin" class="logo">ADMIN</a><div style="cursor:pointer; font-size:25px; position:absolute; right:20px;" onclick="document.getElementById('drw').classList.toggle('active')">☰</div></nav>
-<div class="drw" id="drw">
-    <a href="/">👁️ VIEW SITE</a>
-    <span onclick="openSec('manageBox')">🎬 CONTENT</span>
-    <span onclick="openSec('driveBox')">☁️ G-DRIVE</span>
-    <span onclick="openSec('setBox')">⚙️ SETTINGS</span>
-    <a href="/logout" style="color:red;">🔴 LOGOUT</a>
-</div>
+@app.post("/admin/add_content")
+async def add_content(title: str=Form(...), poster: str=Form(...), rating: str=Form(...), lang: str=Form(...), actors: str=Form(...), trailer: str=Form(...), quality: str=Form(...), desc: str=Form(...), type: str=Form(...), cat: str=Form(...), ott: str=Form(...), json: str=Form(...)):
+    import json as pyjson
+    doc = {"title": title, "poster": poster, "rating": rating, "language": lang, "actors": actors, "trailer": trailer, "quality": quality, "description": desc, "type": type, "category": cat, "ott_id": ott}
+    data = pyjson.loads(json)
+    if type == 'movie': doc['qualities'] = data
+    else: doc['seasons'] = data
+    await content_col.insert_one(doc)
+    return RedirectResponse(url="/admin", status_code=303)
 
-<div class="container">
-    <div style="display:flex; gap:15px; margin-bottom:30px;">
-        <div class="stat-card" style="flex:1;"><b>{{ counts.movies }}</b><br>Movies</div>
-        <div class="stat-card" style="flex:1;"><b>{{ counts.series }}</b><br>Series</div>
-    </div>
+@app.post("/admin/add_ott")
+async def add_ott(name: str=Form(...), logo: str=Form(...)):
+    await ott_col.insert_one({"name": name, "logo": logo})
+    return RedirectResponse(url="/admin", status_code=303)
 
-    <div id="manageBox" class="sec-box" style="display:block;">
-        <input type="text" id="bulkSch" placeholder="Search to delete..." onkeyup="filterBulk()">
-        <div id="bulkList" style="max-height:400px; overflow-y:auto;">
-            {% for m in movies %}<div class="b-item" style="padding:15px; border-bottom:1px solid #111; display:flex; justify-content:space-between;"><span>{{ m.title }}</span><a href="/del_movie/{{ m._id }}" style="color:red;">DELETE</a></div>{% endfor %}
-        </div>
-    </div>
+@app.post("/admin/add_cat")
+async def add_cat(name: str=Form(...)):
+    await category_col.insert_one({"name": name})
+    return RedirectResponse(url="/admin", status_code=303)
 
-    <div id="driveBox" class="sec-box">
-        <form action="/add_gdrive" method="POST"><textarea name="json_data" placeholder="JSON DATA"></textarea><input type="text" name="folder_id" placeholder="Folder ID"><button class="btn-main">ADD DRIVE</button></form>
-        {% for g in gdrives %}<div style="padding:10px; border:1px solid #333; margin-top:10px;">{{ g.folder_id }} - <a href="/activate_gdrive/{{ g._id }}">Activate</a></div>{% endfor %}
-    </div>
-
-    <div id="setBox" class="sec-box">
-        <form action="/update_settings" method="POST">
-            <input type="text" name="site_name" value="{{ s.site_name }}" placeholder="Site Name">
-            <input type="text" name="notice_text" value="{{ s.notice_text }}" placeholder="Notice">
-            <input type="text" name="ad_link" value="{{ s.ad_link }}" placeholder="Ad Link">
-            <button class="btn-main">SAVE</button>
-        </form>
-    </div>
-</div>
-<script>
-    function openSec(id){ document.querySelectorAll('.sec-box').forEach(s=>s.style.display='none'); document.getElementById(id).style.display='block'; document.getElementById('drw').classList.remove('active'); }
-    function filterBulk(){ let q=document.getElementById('bulkSch').value.toLowerCase(); document.querySelectorAll('.b-item').forEach(i=>i.style.display=i.innerText.toLowerCase().includes(q)?'flex':'none'); }
-</script>
-"""
-
-# --- ৬. অ্যাডমিন একশনস ---
-
-@app.route('/login', methods=['POST'])
-def login():
-    creds = get_admin_creds()
-    if request.form['u'] == creds['user'] and request.form['p'] == creds['pass']: session['auth'] = True; return redirect('/admin')
-    return "Invalid"
-
-@app.route('/logout')
-def logout():
-    session.clear(); return redirect('/admin')
-
-@app.route('/update_settings', methods=['POST'])
-def update_settings():
-    if session.get('auth'): 
-        settings_col.update_one({"type": "config"}, {"$set": {
-            "site_name": request.form.get('site_name'), 
-            "ad_link": request.form.get('ad_link'), 
-            "notice_text": request.form.get('notice_text')
-        }})
-    return redirect('/admin')
-
-@app.route('/del_movie/<id>')
-def del_movie(id):
-    if session.get('auth'): movies_col.delete_one({"_id": ObjectId(id)}); episodes_col.delete_many({"series_id": id})
-    return redirect('/admin')
-
-@app.route('/add_gdrive', methods=['POST'])
-def add_gdrive():
-    if session.get('auth'): gdrive_col.insert_one({"json_data": request.form.get('json_data'), "folder_id": request.form.get('folder_id'), "status": "inactive"})
-    return redirect('/admin')
-
-@app.route('/activate_gdrive/<id>')
-def activate_gdrive(id):
-    if session.get('auth'): 
-        gdrive_col.update_many({}, {"$set": {"status": "inactive"}})
-        gdrive_col.update_one({"_id": ObjectId(id)}, {"$set": {"status": "active"}})
-    return redirect('/admin')
-
-# --- ৭. টেলিগ্রাম বট ---
-
-@app.route('/' + BOT_TOKEN, methods=['POST'])
-def get_webhook_update():
-    if request.headers.get('content-type') == 'application/json':
-        json_string = request.get_data().decode('utf-8')
-        update = telebot.types.Update.de_json(json_string)
-        bot.process_new_updates([update])
-        return ''
-    return 'Forbidden', 403
-
-user_data = {}
-
-@bot.message_handler(commands=['start'])
-def bot_start(message):
-    bot.reply_to(message, "🎬 MOVIEBOX PRO BOT চালু আছে!\nআপলোড করতে /upload দিন।")
-
-@bot.message_handler(commands=['upload'])
-def cmd_upload(message):
-    service, _ = get_active_drive_service()
-    if not service: bot.send_message(message.chat.id, "❌ No Active Drive!"); return
-    bot.send_message(message.chat.id, "📽️ Enter Movie/Series Name:"); user_data[message.chat.id] = {'state': 'SEARCH'}
-
-@bot.message_handler(func=lambda m: user_data.get(m.chat.id, {}).get('state') == 'SEARCH')
-def bot_search(message):
-    res = requests.get(f"https://api.themoviedb.org/3/search/multi?api_key={TMDB_API_KEY}&query={message.text}").json()
-    if not res.get('results'): bot.send_message(message.chat.id, "❌ Not found!"); return
-    markup = types.InlineKeyboardMarkup()
-    for m in res['results'][:5]: 
-        title = m.get('title') or m.get('name')
-        markup.add(types.InlineKeyboardButton(f"{title} ({m.get('media_type').upper()})", callback_data=f"sel_{m['id']}_{m['media_type']}"))
-    bot.send_message(message.chat.id, "✅ Select Content:", reply_markup=markup)
-
-@bot.callback_query_handler(func=lambda call: call.data.startswith('sel_'))
-def bot_select(call):
-    _, movie_id, m_type = call.data.split('_')
-    d = requests.get(f"https://api.themoviedb.org/3/{m_type}/{movie_id}?api_key={TMDB_API_KEY}").json()
-    title = d.get('title') or d.get('name')
-    user_data[call.message.chat.id].update({
-        'title': title, 
-        'year': (d.get('release_date') or d.get('first_air_date') or "0000")[:4], 
-        'poster': f"https://image.tmdb.org/t/p/w500{d['poster_path']}", 
-        'backdrop': f"https://image.tmdb.org/t/p/original{d['backdrop_path']}",
-        'type': 'movie' if m_type == 'movie' else 'series',
-        'state': 'LANG'
+# --- অটো আপলোড টেলিগ্রাম বট ---
+@bot.on_message(filters.chat(CHANNEL_ID) & (filters.video | filters.document))
+async def auto_post(client, message):
+    title = message.caption or "New Upload"
+    link = f"https://t.me/c/{str(CHANNEL_ID)[4:]}/{message.id}"
+    await content_col.insert_one({
+        "title": title, "poster": "", "type": "movie", "category": "General",
+        "qualities": [{"quality": "Original File", "link": link}]
     })
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True); markup.add("Bangla", "Hindi", "English", "Dual Audio")
-    bot.send_message(call.message.chat.id, "🌐 Select Language:", reply_markup=markup)
 
-@bot.message_handler(func=lambda m: user_data.get(m.chat.id, {}).get('state') == 'LANG')
-def bot_lang(message):
-    user_data[message.chat.id]['lang'] = message.text; user_data[message.chat.id]['state'] = 'FILE'
-    bot.send_message(message.chat.id, "📁 Send the Video File:")
+@app.on_event("startup")
+async def startup(): await bot.start()
 
-@bot.message_handler(content_types=['video', 'document'])
-def bot_file(message):
-    cid = message.chat.id
-    if user_data.get(cid, {}).get('state') == 'FILE':
-        bot.send_message(cid, "🚀 Uploading to Google Drive..."); service, folder_id = get_active_drive_service()
-        try:
-            file_id = message.video.file_id if message.content_type == 'video' else message.document.file_id
-            file_info = bot.get_file(file_id)
-            file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
-            
-            with tempfile.NamedTemporaryFile(delete=False) as tmp:
-                r = requests.get(file_url, stream=True)
-                for chunk in r.iter_content(chunk_size=1024*1024): tmp.write(chunk)
-                tmp_path = tmp.name
-            
-            media = MediaFileUpload(tmp_path, mimetype='video/mp4', resumable=True)
-            drive_file = service.files().create(body={'name': user_data[cid]['title'], 'parents': [folder_id]}, media_body=media, fields='id, webViewLink').execute()
-            service.permissions().create(fileId=drive_file['id'], body={'type': 'anyone', 'role': 'viewer'}).execute()
-            
-            movies_col.insert_one({
-                "type": user_data[cid]['type'], 
-                "title": user_data[cid]['title'], 
-                "year": user_data[cid]['year'], 
-                "poster": user_data[cid]['poster'], 
-                "backdrop": user_data[cid]['backdrop'], 
-                "language": user_data[cid]['lang'], 
-                "video_url": drive_file['webViewLink']
-            })
-            bot.send_message(cid, f"✅ SUCCESS! Added."); os.remove(tmp_path)
-        except Exception as e: bot.send_message(cid, f"❌ ERROR: {e}")
-        user_data[cid] = {}
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=10000)
+if __name__ == "__main__":
+    uvicorn.run(app, host="0.0.0.0", port=8000)
