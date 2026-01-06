@@ -12,7 +12,7 @@ import uvicorn
 # --- ১. এনভায়রনমেন্ট ভেরিয়েবলস (Render থেকে আসবে) ---
 API_ID = int(os.getenv("API_ID", "12345"))
 API_HASH = os.getenv("API_HASH", "your_api_hash")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "your_bot_token")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "mongodb+srv://mesohas358:mesohas358@cluster0.6kxy1vc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0")
 MONGO_URL = os.getenv("MONGO_URL", "your_mongodb_url")
 CHANNEL_ID = int(os.getenv("CHANNEL_ID", "-100123456789"))
 ADMIN_PASS = os.getenv("ADMIN_PASS", "admin123")
