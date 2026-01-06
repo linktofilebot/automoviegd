@@ -1,8 +1,6 @@
-fastapi
-uvicorn
-pyrogram
-tgcrypto
-motor
-python-multipart
-jinja2
+flask
+flask-socketio
+eventlet
+pymongo
 dnspython
+gunicorn
