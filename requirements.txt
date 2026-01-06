@@ -5,3 +5,4 @@ tgcrypto
 motor
 python-multipart
 jinja2
+dnspython
