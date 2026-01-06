@@ -26,7 +26,7 @@ app.secret_key = os.environ.get("SECRET_KEY", "moviebox_ultra_master_2026_premiu
 MONGO_URI = "mongodb+srv://mesohas358:mesohas358@cluster0.6kxy1vc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 TMDB_API_KEY = "7dc544d9253bccc3cfecc1c677f69819"
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 # MongoDB কানেকশন
 try:
@@ -182,7 +182,7 @@ def content_detail(id):
     return render_template_string(DETAIL_HTML, m=m, eps=eps, embed_url=embed_url, is_drive=is_drive, s=get_config())
 
 DETAIL_HTML = CSS + """
-<nav class="nav"><a href="javascript:history.back()" style="position:absolute; left:20px; color:#fff; font-size:24px;"><i class="fas fa-arrow-left"></i></a><a href="/" class="logo">{{ s.site_name }}</a></nav>
+<nav class="nav"><a href="javascript:history.back()" style="position:absolute; left:20px; color:#fff; font-size:24px;"><i class="fas fa-chevron-left"></i></a><a href="/" class="logo">{{ s.site_name }}</a></nav>
 <div class="container" style="max-width:1100px;">
     {% if is_drive %}
         <iframe src="{{ embed_url }}" allow="autoplay" scrolling="no"></iframe>
@@ -220,7 +220,7 @@ def admin():
     return render_template_string(ADMIN_HTML, movies=movies, gdrives=gdrives, counts=counts, s=get_config(), a=creds)
 
 ADMIN_HTML = CSS + """
-<nav class="nav"><a href="/admin" class="logo">CONTROL CENTER</a><div style="cursor:pointer; font-size:32px; position:absolute; right:20px; color:var(--neon);" onclick="document.getElementById('drw').classList.toggle('active')">☰</div></nav>
+<nav class="nav"><a href="/admin" class="logo">ADMIN CONTROL</a><div style="cursor:pointer; font-size:32px; position:absolute; right:20px; color:var(--neon);" onclick="document.getElementById('drw').classList.toggle('active')">☰</div></nav>
 <div class="drw" id="drw">
     <a href="/" style="background:var(--main); font-weight:bold;"><i class="fas fa-eye"></i> VISIT SITE</a>
     <span onclick="openSec('manageBox')"><i class="fas fa-film"></i> CONTENT DATABASE</span>
@@ -258,8 +258,8 @@ ADMIN_HTML = CSS + """
     <div id="driveBox" class="sec-box">
         <h3 style="color:var(--neon); margin-bottom:20px;"><i class="fab fa-google-drive"></i> CLOUD DRIVE MANAGEMENT</h3>
         <form action="/add_gdrive" method="POST">
-            <textarea name="json_data" rows="5" placeholder="Paste Service Account JSON content here..." required></textarea>
-            <input type="text" name="folder_id" placeholder="Google Drive Folder ID" required>
+            <textarea name="json_data" rows="5" placeholder="Paste G-Drive Service Account JSON here..." style="border-color:#444;" required></textarea>
+            <input type="text" name="folder_id" placeholder="Target Folder ID" required>
             <button class="btn-main" style="background:cyan; color:black;">CONNECT CLOUD DRIVE</button>
         </form>
         <div style="margin-top:30px;">
@@ -388,7 +388,16 @@ def del_ep(id):
     if session.get('auth'): episodes_col.delete_one({"_id": ObjectId(id)})
     return redirect('/admin')
 
-# --- ৭. টেলিগ্রাম বট লজিক (৪ জিবি + ড্রাইভ আপলোড) ---
+# --- ৭. টেলিগ্রাম বট (Webhook Support) ---
+
+@app.route('/' + BOT_TOKEN, methods=['POST'])
+def get_webhook_update():
+    if request.headers.get('content-type') == 'application/json':
+        json_string = request.get_data().decode('utf-8')
+        update = telebot.types.Update.de_json(json_string)
+        bot.process_new_updates([update])
+        return ''
+    return 'Forbidden', 403
 
 user_data = {}
 
@@ -405,7 +414,7 @@ def cmd_upload(message):
 def bot_search(message):
     res = requests.get(f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={message.text}").json()
     if not res.get('results'):
-        bot.send_message(message.chat.id, "❌ No results found on TMDB.")
+        bot.send_message(message.chat.id, "❌ Movie not found! Try again.")
         return
     markup = types.InlineKeyboardMarkup()
     for m in res['results'][:5]:
@@ -444,7 +453,6 @@ def bot_file(message):
             
             service, folder_id = get_active_drive_service()
             
-            # Use temp file for streaming transfer
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 r = requests.get(file_url, stream=True)
                 for chunk in r.iter_content(chunk_size=1024*1024): tmp.write(chunk)
@@ -466,9 +474,5 @@ def bot_file(message):
             bot.send_message(cid, f"❌ ERROR: {str(e)}")
         user_data[cid] = {}
 
-def run_bot():
-    bot.infinity_polling()
-
 if __name__ == '__main__':
-    threading.Thread(target=run_bot, daemon=True).start()
     app.run(host='0.0.0.0', port=5000)
