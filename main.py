@@ -210,71 +210,78 @@ async def ad_verify(id: str, ctype: str, cidx: str, step: int):
 # --- ৭. ৩-মেনু অ্যাডমিন প্যানেল উইথ লগইন ---
 
 @app.get("/admin", response_class=HTMLResponse)
-async def admin_page(request: Request):
+async def admin_page(request: Request, q: str = Query(None)):
+    # ১. কুকি থেকে অ্যাডমিন অথেন্টিকেশন চেক
     auth = request.cookies.get("admin_auth")
     if auth != ADMIN_PASS:
         return f"<html><head><meta name='viewport' content='width=device-width, initial-scale=1.0'>{CSS}</head><body>" \
-               f"<div class='login-box'><h1>🔐 Admin Login</h1><form action='/admin/login' method='post'>" \
-               f"<input type='password' name='password' placeholder='Enter Admin Password' required>" \
-               f"<button class='btn' style='width:100%'>Login</button></form></div></body></html>"
+               f"<div class='container' style='max-width:400px; margin-top:100px;'><div class='admin-card'><h2>🔐 Admin Login</h2>" \
+               f"<form action='/admin/login' method='post'><input type='password' name='password' placeholder='Enter Password' required><button class='btn' style='width:100%'>Login</button></form></div></div></body></html>"
     
+    # ২. ডাটাবেস থেকে সকল তথ্য সংগ্রহ
     conf = await get_site_conf()
     otts = await ott_col.find().to_list(100)
     cats = await category_col.find().to_list(100)
-    contents = await content_col.find().sort("_id", -1).to_list(20)
+    contents = await content_col.find({"title": {"$regex": q, "$options": "i"}} if q else {}).sort("_id", -1).to_list(20)
     
-    html = f"<html><head><title>Admin Panel</title>{CSS}</head><body><div class='container'><h1 class='neon-text'>🛡️ MASTER DASHBOARD</h1>"
+    # এরর ফিক্স: ডাবল কার্লি ব্র্যাকেট ব্যবহার করা হয়েছে যেন পাইথন এরর না দেয়
+    placeholder_text = '[{{"quality":"720p","link":"url"}}]'
     
-    # মেনু ১: জেনারেল সেটিংস
+    html = f"<html><head><title>Admin Panel - {conf['site_name']}</title>{CSS}</head><body><div class='container'><h1 class='neon-text'>🛡️ MASTER DASHBOARD</h1>"
+    
+    # --- মেনু ১: জেনারেল সেটিংস (সাইট নাম, নোটিশ, অ্যাডস) ---
     html += f"""<div class='admin-card'><h3>⚙️ ১. Global Settings</h3>
     <form action='/admin/save_settings' method='post'>
-        Site Name: <input name='site_name' value='{conf['site_name']}'>
-        Notice Bar: <textarea name='notice'>{conf['notice']}</textarea>
-        Total Ad Steps: <input type='number' name='total_steps' value='{conf['total_steps']}'>
-        Ad URLs (Comma Separated): <textarea name='ad_urls' rows='3'>{conf['ad_step_urls']}</textarea>
-        Popunder Script: <textarea name='popunder' rows='3'>{conf['popunder']}</textarea>
-        <button class='btn'>UPDATE SITE SETTINGS</button>
+        <label>🌐 Site Name:</label><input name='site_name' value='{conf['site_name']}'>
+        <label>📢 Notice Bar:</label><textarea name='notice' rows='2'>{conf['notice']}</textarea>
+        <label>🔢 Total Ad Steps (Count):</label><input type='number' name='total_steps' value='{conf['total_steps']}'>
+        <label>🔗 Ad URLs (Comma Separated):</label><textarea name='ad_urls' rows='3'>{conf['ad_step_urls']}</textarea>
+        <label>🖼️ Popunder / Social Bar Script:</label><textarea name='popunder' rows='3'>{conf['popunder']}</textarea>
+        <button class='btn'>✅ UPDATE ALL SETTINGS</button>
     </form></div>"""
 
-    # মেনু ২: ট্যাক্সোনোমি (OTT & Category)
-    html += f"""<div class='admin-card'><h3>📺 ২. OTT & Categories</h3>
+    # --- মেনু ২: ট্যাক্সোনোমি (OTT প্ল্যাটফর্ম ও ক্যাটাগরি ম্যানেজমেন্ট) ---
+    html += f"""<div class='admin-card'><h3>📺 ২. Media & Labels</h3>
     <div style='display:grid; grid-template-columns: 1fr 1fr; gap:25px;'>
         <div>
-            <h4>Add OTT Provider</h4>
-            <form action='/admin/add_ott' method='post'><input name='name' placeholder='Name'><input name='logo' placeholder='Logo URL'><button class='btn'>Add OTT</button></form>
-            <div style='margin-top:10px;'>""" + "".join([f"<p>🔹 {o['name']} <a href='/admin/del_ott/{o['_id']}' style='color:red;'>[Del]</a></p>" for o in otts]) + """</div>
+            <h4>➕ Add OTT Provider</h4>
+            <form action='/admin/add_ott' method='post'><input name='name' placeholder='Name (Netflix)'><input name='logo' placeholder='Logo URL'><button class='btn'>ADD OTT</button></form>
+            <div style='margin-top:10px; max-height:150px; overflow-y:auto;'>""" + "".join([f"<p style='font-size:12px;'>🔹 {o['name']} <a href='/admin/del_ott/{o['_id']}' style='color:red; text-decoration:none;'>[Del]</a></p>" for o in otts]) + """</div>
         </div>
         <div>
-            <h4>Add Category</h4>
-            <form action='/admin/add_cat' method='post'><input name='name' placeholder='Category Name'><button class='btn'>Add Category</button></form>
-            <div style='margin-top:10px;'>""" + "".join([f"<p>🔸 {c['name']} <a href='/admin/del_cat/{c['_id']}' style='color:red;'>[Del]</a></p>" for c in cats]) + """</div>
+            <h4>➕ Add Category</h4>
+            <form action='/admin/add_cat' method='post'><input name='name' placeholder='Category Name'><button class='btn'>ADD CAT</button></form>
+            <div style='margin-top:10px; max-height:150px; overflow-y:auto;'>""" + "".join([f"<p style='font-size:12px;'>🔸 {c['name']} <a href='/admin/del_cat/{c['_id']}' style='color:red; text-decoration:none;'>[Del]</a></p>" for c in cats]) + """</div>
         </div>
     </div></div>"""
 
-    # মেনু ৩: কন্টেন্ট ম্যানেজার
+    # --- মেনু ৩: কন্টেন্ট ম্যানেজার (সব ডিটেইলস এবং ডিলিট সিস্টেম) ---
     html += f"""<div class='admin-card'><h3>🎬 ৩. Content Management</h3>
     <form action='/admin/add_content' method='post'>
-        <div style='display:grid; grid-template-columns: 1fr 1fr; gap:12px;'>
-            <input name='title' placeholder='Movie Title' required><input name='poster' placeholder='Poster URL'>
-            <input name='rating' placeholder='Rating'><input name='lang' placeholder='Language'>
-            <input name='actors' placeholder='Lead Cast'><input name='trailer' placeholder='Trailer URL'>
-            <input name='quality' placeholder='Quality (4K)'><select name='type'><option value='movie'>Movie</option><option value='series'>Series</option></select>
-            <select name='cat'>{"".join([f"<option value='{c['name']}'>{c['name']}</option>" for c in cats])}</select>
-            <select name='ott'>{"".join([f"<option value='{o['_id']}'>{o['name']}</option>" for o in otts])}</select>
+        <div style='display:grid; grid-template-columns:1fr 1fr; gap:12px;'>
+            <input name='title' placeholder='Movie Title' required><input name='poster' placeholder='Poster Image URL'>
+            <input name='rating' placeholder='Rating (e.g. 8.4)'><input name='lang' placeholder='Language (English)'>
+            <input name='actors' placeholder='Lead Cast / Actors'><input name='trailer' placeholder='YouTube Trailer Link'>
+            <input name='quality' placeholder='Quality (e.g. 4K, HD)'>
+            <select name='type'><option value='movie'>Movie</option><option value='series'>Web Series</option></select>
+            <select name='cat'><option value=''>-- Select Category --</option>""" + "".join([f"<option value='{c['name']}'>{c['name']}</option>" for c in cats]) + """</select>
+            <select name='ott'><option value=''>-- Select OTT --</option>""" + "".join([f"<option value='{o['_id']}'>{o['name']}</option>" for o in otts]) + """</select>
         </div>
-        Description: <textarea name='desc'></textarea>
-        JSON Quality Data: <textarea name='json' rows='4' placeholder='[{"quality":"720p","link":"url"}]'></textarea>
-        <button class='btn'>🚀 PUBLISH NOW</button>
+        <label>📝 Description / Story:</label><textarea name='desc' rows='3'></textarea>
+        <label>📜 JSON Quality Links:</label><textarea name='json' rows='4' placeholder='{placeholder_text}'></textarea>
+        <button class='btn'>🚀 PUBLISH CONTENT NOW</button>
     </form>
-    <hr style='border:1px solid #333; margin:20px 0;'>
-    <h4>🗑️ Manage Uploaded Content</h4>
-    {"".join([f"<p>🎥 {c['title']} <a href='/admin/del_con/{c['_id']}' style='color:red; margin-left:10px;'>[Delete]</a></p>" for c in contents])}
+    <hr style='border:1px solid #333; margin:25px 0;'>
+    <h4>🔍 Recent Content (Search to manage)</h4>
+    <form style='display:flex; gap:5px; margin-bottom:15px;'><input name='q' placeholder='Search item to delete...' value='{q or ''}'><button class='btn btn-sm'>Search</button></form>
+    <div style='max-height:300px; overflow-y:auto;'>""" + "".join([f"<p style='border-bottom:1px solid #222; padding:5px;'>🎥 {c['title']} <a href='/admin/del_con/{c['_id']}' style='color:red; float:right; text-decoration:none;'>[DELETE]</a></p>" for c in contents]) + """</div>
     </div>"""
 
-    # বট কন্ট্রোল
-    html += f"<div class='admin-card'><h3>🤖 Bot Control</h3><a href='/admin/restart_bot' class='btn'>RESTART BOT</a></div>"
+    # --- বট কন্ট্রোল সেকশন ---
+    status = "✅ ONLINE" if bot.is_connected else "❌ OFFLINE"
+    html += f"<div class='admin-card'><h3>🤖 Bot Control (Status: {status})</h3><a href='/admin/restart_bot' class='btn' style='background:#444;'>🔄 START / RESTART BOT</a></div>"
     
-    html += "</div><div style='text-align:center; padding:20px;'><a href='/' class='btn' style='background:gray;'>⬅️ BACK TO HOME</a></div></body></html>"
+    html += "<div style='text-align:center; padding:20px;'><a href='/' class='btn' style='background:gray;'>⬅️ BACK TO HOMEPAGE</a></div></div></body></html>"
     return html
 
 # --- ৮. অ্যাডমিন অ্যাকশন হ্যান্ডলারস (Post) ---
