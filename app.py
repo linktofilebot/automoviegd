@@ -16,20 +16,15 @@ from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from google.oauth2 import service_account
 
-# --- ২. কনফিগারেশন ও সেটিংস ---
+# --- ২. অ্যাপ কনফিগারেশন ---
 app = Flask(__name__)
-# আপনার বট টোকেন সরাসরি বসিয়ে দেওয়া হয়েছে
 BOT_TOKEN = "8589295170:AAHSsqlS6Zp_c-xsIAqZOv6zNiU2m_U6cro"
 app.secret_key = os.environ.get("SECRET_KEY", "moviebox_ultra_master_2026_premium")
 
-# রেন্ডার ভেরিয়েবল থেকে সাইট URL নেওয়ার অপশন
-SITE_URL = os.environ.get("SITE_URL", "https://moviehallbd71.onrender.com")
-
-# ডাটাবেস ও এপিআই সেটিংস
 MONGO_URI = "mongodb+srv://mesohas358:mesohas358@cluster0.6kxy1vc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 TMDB_API_KEY = "7dc544d9253bccc3cfecc1c677f69819"
+SITE_URL = os.environ.get("SITE_URL", "https://moviehallbd71.onrender.com")
 
-# Webhook এর জন্য threaded=False
 bot = telebot.TeleBot(BOT_TOKEN, threaded=False)
 
 # MongoDB কানেকশন
@@ -38,20 +33,16 @@ try:
     db = client['moviebox_v5_db']
     movies_col, episodes_col = db['movies'], db['episodes']
     categories_col, languages_col = db['categories'], db['languages']
-    ott_col, settings_col = db['ott_platforms'], db['settings']
+    ott_col, settings_col, comments_col = db['ott_platforms'], db['settings'], db['comments']
     gdrive_col = db['gdrive_accounts']
 except Exception as e:
-    print(f"Database Error: {e}")
+    print(f"Database Connection Error: {e}")
 
-# এডমিন ক্রেডেনশিয়াল লোড ফাংশন
+# এডমিন ক্রেডেনশিয়াল লোড
 def get_admin_creds():
     creds = settings_col.find_one({"type": "admin_creds"})
     if not creds:
-        creds = {
-            "type": "admin_creds",
-            "user": os.environ.get("ADMIN_USER", "admin"),
-            "pass": os.environ.get("ADMIN_PASS", "12345")
-        }
+        creds = {"type": "admin_creds", "user": "admin", "pass": "12345"}
         settings_col.insert_one(creds)
     return creds
 
@@ -74,7 +65,7 @@ def get_active_drive_service():
         except: return None, None
     return None, None
 
-# --- ৩. প্রিমিয়াম লাইটিং CSS ---
+# --- ৩. প্রিমিয়াম লাইটিং CSS (Extreme Premium) ---
 CSS = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -91,17 +82,19 @@ CSS = """
     .search-box input { background: transparent; border: none; color: #fff; width: 100%; padding: 12px; font-size: 16px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 20px; }
     @media (min-width: 600px) { .grid { grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 30px; } }
-    .card { background: var(--card); border-radius: 18px; overflow: hidden; border: 1px solid #222; text-decoration: none; color: #fff; transition: 0.5s; display: block; position: relative; }
+    .card { background: var(--card); border-radius: 18px; overflow: hidden; border: 1px solid #222; text-decoration: none; color: #fff; transition: 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: block; position: relative; }
     .card:hover { transform: scale(1.05); border-color: var(--neon); box-shadow: 0 15px 35px rgba(0,242,255,0.2); }
     .card img { width: 100%; aspect-ratio: 2/3; object-fit: cover; }
     .card-title { padding: 15px; text-align: center; font-size: 15px; font-weight: 600; background: linear-gradient(0deg, #000, transparent); position: absolute; bottom: 0; width: 100%; }
-    .stat-card { background: #0a0a0a; padding: 30px; border-radius: 20px; text-align: center; border: 1px solid #222; box-shadow: 0 10px 20px #000; position: relative; }
+    .stat-card { background: #0a0a0a; padding: 30px; border-radius: 20px; text-align: center; border: 1px solid #222; box-shadow: 0 10px 20px #000; position: relative; overflow: hidden; }
+    .stat-card::after { content: ''; position: absolute; top:0; left:0; width:100%; height:3px; background: var(--neon); box-shadow: 0 0 15px var(--neon); }
     .stat-card b { font-size: 35px; color: var(--neon); text-shadow: 0 0 10px var(--neon); }
-    .btn-main { background: linear-gradient(45deg, var(--main), #ff4d4d); color: #fff; border: none; padding: 15px 30px; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; text-align: center; display: inline-block; text-decoration: none; transition: 0.3s; box-shadow: 0 5px 20px var(--glow); }
+    .btn-main { background: linear-gradient(45deg, var(--main), #ff4d4d); color: #fff; border: none; padding: 15px 30px; border-radius: 10px; cursor: pointer; font-weight: bold; width: 100%; text-align: center; display: inline-block; text-decoration: none; transition: 0.3s; text-transform: uppercase; box-shadow: 0 5px 20px var(--glow); }
     .drw { position: fixed; top: 0; right: -100%; width: 320px; height: 100%; background: #050505; border-left: 1px solid #333; transition: 0.5s; z-index: 2000; padding-top: 80px; box-shadow: -20px 0 60px #000; }
     .drw.active { right: 0; }
     .drw span, .drw a { padding: 22px 30px; display: block; color: #eee; text-decoration: none; border-bottom: 1px solid #111; cursor: pointer; }
-    .sec-box { display: none; background: #080808; padding: 35px; border-radius: 25px; margin-top: 30px; border: 1px solid #1a1a1a; }
+    .sec-box { display: none; background: #080808; padding: 35px; border-radius: 25px; margin-top: 30px; border: 1px solid #1a1a1a; box-shadow: 0 30px 60px rgba(0,0,0,0.8); }
+    iframe, video { width: 100%; border-radius: 20px; background: #000; aspect-ratio: 16/9; box-shadow: 0 0 50px rgba(0,0,0,1); }
     input, select, textarea { width: 100%; padding: 15px; margin: 12px 0; background: #111; border: 1px solid #333; color: #fff; border-radius: 10px; }
     .badge-active { background: #00ff00; color: #000; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 800; box-shadow: 0 0 15px #00ff00; }
 </style>
@@ -124,12 +117,10 @@ HOME_HTML = CSS + """
 {{ s.popunder|safe }}
 <nav class="nav"><a href="/" class="logo">{{ s.site_name }}</a></nav>
 <div class="container">
-    <div style="color:{{s.notice_color}}; text-align:center; margin-bottom:25px; font-weight:bold; text-shadow: 0 0 10px {{s.notice_color}};">
-        <i class="fas fa-fire"></i> {{s.notice_text}}
-    </div>
+    <div style="color:{{s.notice_color}}; text-align:center; margin-bottom:25px; font-weight:bold; text-shadow: 0 0 10px {{s.notice_color}};">{{s.notice_text}}</div>
     <form action="/" method="GET" class="search-box">
         <input type="text" name="q" placeholder="Search premium movies & series..." value="{{ query or '' }}">
-        <button type="submit" style="background:none; border:none; color:var(--neon); font-size:18px;"><i class="fas fa-search"></i></button>
+        <button type="submit" style="background:none; border:none; color:var(--neon);"><i class="fas fa-search"></i></button>
     </form>
     <div class="grid">
         {% for m in movies %}
@@ -166,36 +157,69 @@ DETAIL_HTML = CSS + """
 def admin():
     creds = get_admin_creds()
     if not session.get('auth'):
-        return render_template_string(CSS + """<div class="container"><form action="/login" method="POST" class="sec-box" style="display:block; max-width:400px; margin:100px auto; border-color:var(--neon);"><h2 style="text-align:center; color:var(--neon);">SECURE LOGIN</h2><input type="text" name="u" placeholder="Username" required><input type="password" name="p" placeholder="Password" required><button class="btn-main">LOGIN</button></form></div>""")
-    
+        return render_template_string(CSS + """<div class="container"><form action="/login" method="POST" class="sec-box" style="display:block; max-width:400px; margin:100px auto; border-color:var(--neon); box-shadow:0 0 30px rgba(0,242,255,0.2);"><h2 style="text-align:center; color:var(--neon);">MASTER ACCESS</h2><input type="text" name="u" placeholder="Username" required><input type="password" name="p" placeholder="Password" required><button class="btn-main" style="background:var(--neon); color:#000;">UNLOCK PANEL</button></form></div>""")
     movies = list(movies_col.find().sort("_id", -1))
     gdrives = list(gdrive_col.find())
     counts = {"movies": movies_col.count_documents({"type": "movie"}), "series": movies_col.count_documents({"type": "series"})}
-    return render_template_string(ADMIN_HTML, movies=movies, gdrives=gdrives, counts=counts, s=get_config(), a=creds)
+    return render_template_string(ADMIN_HTML, movies=movies, gdrives=gdrives, counts=counts, s=get_config(), a=creds, otts=list(ott_col.find()), cats=list(categories_col.find()), langs=list(languages_col.find()))
 
 ADMIN_HTML = CSS + """
 <nav class="nav"><a href="/admin" class="logo">ADMIN CONTROL</a><div style="cursor:pointer; font-size:32px; position:absolute; right:20px; color:var(--neon);" onclick="document.getElementById('drw').classList.toggle('active')">☰</div></nav>
 <div class="drw" id="drw">
     <a href="/" style="background:var(--main);">👁️ VIEW SITE</a>
     <span onclick="openSec('manageBox')">🎬 CONTENT DATABASE</span>
-    <span onclick="openSec('driveBox')">☁️ DRIVE MANAGER</span>
+    <span onclick="openSec('epManageBox')">📂 EPISODE MANAGER</span>
+    <span onclick="openSec('driveBox')">☁️ G-DRIVE CLOUD</span>
+    <span onclick="openSec('ottBox')">📺 PLATFORMS/CATS</span>
     <span onclick="openSec('setBox')">⚙️ SECURITY & SETTINGS</span>
-    <a href="/logout" style="color:red;">🔴 LOGOUT</a>
+    <a href="/logout" style="color:#ff4d4d;">🔴 LOGOUT</a>
 </div>
+
 <div class="container">
-    <div id="setBox" class="sec-box">
-        <form action="/update_admin" method="POST"><input type="text" name="new_user" value="{{ a.user }}"><input type="text" name="new_pass" value="{{ a.pass }}"><button class="btn-main">UPDATE LOGIN</button></form>
+    <div style="display:flex; gap:20px; margin-bottom:40px;">
+        <div class="stat-card" style="flex:1;"><b>{{ counts.movies }}</b><br><span>MOVIES</span></div>
+        <div class="stat-card" style="flex:1;"><b>{{ counts.series }}</b><br><span>SERIES</span></div>
     </div>
+
+    <!-- ড্রাইভ ম্যানেজার -->
+    <div id="driveBox" class="sec-box">
+        <h3 style="color:var(--neon);">☁️ GOOGLE DRIVE MANAGEMENT</h3>
+        <form action="/add_gdrive" method="POST"><textarea name="json_data" rows="5" placeholder="Service Account JSON" required></textarea><input type="text" name="folder_id" placeholder="Folder ID" required><button class="btn-main">CONNECT DRIVE</button></form>
+        {% for g in gdrives %}<div style="padding:15px; border:1px solid #333; margin-top:15px; display:flex; justify-content:space-between; align-items:center;"><div>Folder: {{ g.folder_id }} {% if g.status == 'active' %}<span class="badge-active">ACTIVE</span>{% endif %}</div><div><a href="/activate_gdrive/{{ g._id }}" style="color:cyan;">Activate</a> | <a href="/del_gdrive/{{ g._id }}" style="color:red;">Delete</a></div></div>{% endfor %}
+    </div>
+
+    <!-- কন্টেন্ট ম্যানেজার -->
     <div id="manageBox" class="sec-box" style="display:block;">
-        <input type="text" id="bulkSch" placeholder="🔍 Search..." onkeyup="filterBulk()">
-        <div id="bulkList" style="max-height:500px; overflow-y:auto; margin-top:15px;">
-            {% for m in movies %}<div class="b-item" style="padding:15px; border-bottom:1px solid #222; display:flex; justify-content:space-between;"><span>{{ m.title }}</span><a href="/del_movie/{{ m._id }}" style="color:red;">DELETE</a></div>{% endfor %}
+        <h3>🎬 DATABASE SEARCH</h3>
+        <input type="text" id="bulkSch" placeholder="🔍 Type movie name..." onkeyup="filterBulk()" style="background:#000; height:60px; border-radius:15px; border-color:#333;">
+        <div id="bulkList" style="max-height:600px; overflow-y:auto; margin-top:20px;">
+            {% for m in movies %}<div class="b-item" style="padding:18px; border-bottom:1px solid #111; display:flex; justify-content:space-between;"><span>{{ m.title }}</span><a href="/del_movie/{{ m._id }}" style="color:#ff4d4d; font-weight:bold;">DELETE</a></div>{% endfor %}
         </div>
+    </div>
+
+    <!-- ইপিসোড ম্যানেজার -->
+    <div id="epManageBox" class="sec-box">
+        <h3>📂 EPISODE CONTROL</h3>
+        <select id="sSel" onchange="loadEps(this.value)" style="background:#000; border-color:var(--neon);"><option value="">-- SELECT SERIES --</option>{% for m in movies if m.type == 'series' %}<option value="{{ m._id }}">{{ m.title }}</option>{% endfor %}</select>
+        <div id="epList" style="margin-top:25px;"></div>
+    </div>
+
+    <!-- সেটিংস এবং সিকিউরিটি -->
+    <div id="setBox" class="sec-box">
+        <form action="/update_admin" method="POST"><label>ADMIN USER</label><input type="text" name="new_user" value="{{ a.user }}"><label>ADMIN PASS</label><input type="text" name="new_pass" value="{{ a.pass }}"><button class="btn-main">UPDATE LOGIN</button></form>
+        <form action="/update_settings" method="POST" style="margin-top:30px;"><label>SITE NAME</label><input type="text" name="site_name" value="{{ s.site_name }}"><label>AD LINK</label><input type="text" name="ad_link" value="{{ s.ad_link }}"><button class="btn-main">SAVE SETTINGS</button></form>
+    </div>
+
+    <!-- OTT, Category, Language -->
+    <div id="ottBox" class="sec-box">
+        <form action="/add_ott" method="POST"><input type="text" name="name" placeholder="OTT Name"><input type="text" name="logo" placeholder="Logo URL"><button class="btn-main">Add OTT</button></form>
+        <form action="/add_cat" method="POST" style="margin-top:20px;"><input type="text" name="name" placeholder="New Category"><button class="btn-main">Add Category</button></form>
     </div>
 </div>
 <script>
     function openSec(id){ document.querySelectorAll('.sec-box').forEach(s=>s.style.display='none'); document.getElementById(id).style.display='block'; document.getElementById('drw').classList.remove('active'); }
     function filterBulk(){ let q=document.getElementById('bulkSch').value.toLowerCase(); document.querySelectorAll('.b-item').forEach(i=>i.style.display=i.innerText.toLowerCase().includes(q)?'flex':'none'); }
+    async function loadEps(sid){ if(!sid) return; let r = await fetch('/api/episodes/'+sid); let data = await r.json(); let div = document.getElementById('epList'); div.innerHTML = ''; data.forEach(e => { div.innerHTML += `<div style="padding:15px; border-bottom:1px solid #222; display:flex; justify-content:space-between; background:#111;"><span>S${e.season} E${e.episode}</span><a href="/del_ep/${e._id}" style="color:red;">REMOVE</a></div>`; }); }
 </script>
 """
 
@@ -214,7 +238,7 @@ def update_admin():
 
 @app.route('/del_movie/<id>')
 def del_movie(id):
-    if session.get('auth'): movies_col.delete_one({"_id": ObjectId(id)})
+    if session.get('auth'): movies_col.delete_one({"_id": ObjectId(id)}); episodes_col.delete_many({"series_id": id})
     return redirect('/admin')
 
 @app.route('/api/episodes/<sid>')
@@ -223,7 +247,42 @@ def get_eps_api(sid):
     for e in eps: e['_id'] = str(e['_id'])
     return jsonify(eps)
 
-# --- ৭. টেলিগ্রাম বট (MANUAL WEBHOOK SYSTEM) ---
+@app.route('/add_gdrive', methods=['POST'])
+def add_gdrive():
+    if session.get('auth'): gdrive_col.insert_one({"json_data": request.form.get('json_data'), "folder_id": request.form.get('folder_id'), "status": "inactive"})
+    return redirect('/admin')
+
+@app.route('/activate_gdrive/<id>')
+def activate_gdrive(id):
+    if session.get('auth'): gdrive_col.update_many({}, {"$set": {"status": "inactive"}}); gdrive_col.update_one({"_id": ObjectId(id)}, {"$set": {"status": "active"}})
+    return redirect('/admin')
+
+@app.route('/del_gdrive/<id>')
+def del_gdrive(id):
+    if session.get('auth'): gdrive_col.delete_one({"_id": ObjectId(id)})
+    return redirect('/admin')
+
+@app.route('/add_ott', methods=['POST'])
+def add_ott():
+    if session.get('auth'): ott_col.insert_one({"name": request.form.get('name'), "logo": request.form.get('logo')})
+    return redirect('/admin')
+
+@app.route('/add_cat', methods=['POST'])
+def add_cat():
+    if session.get('auth'): categories_col.insert_one({"name": request.form.get('name')})
+    return redirect('/admin')
+
+@app.route('/update_settings', methods=['POST'])
+def update_settings():
+    if session.get('auth'): settings_col.update_one({"type": "config"}, {"$set": {"site_name": request.form.get('site_name'), "ad_link": request.form.get('ad_link'), "notice_text": request.form.get('notice_text')}})
+    return redirect('/admin')
+
+@app.route('/del_ep/<id>')
+def del_ep(id):
+    if session.get('auth'): episodes_col.delete_one({"_id": ObjectId(id)})
+    return redirect('/admin')
+
+# --- ৭. টেলিগ্রাম বট (WEBHOOK Support) ---
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_webhook_update():
@@ -237,7 +296,7 @@ def get_webhook_update():
 user_data = {}
 
 @bot.message_handler(commands=['start'])
-def bot_welcome(message):
+def bot_start(message):
     bot.reply_to(message, "🎬 MOVIEBOX PRO BOT চালু আছে!\nমুভি আপলোড করতে /upload কমান্ড দিন।")
 
 @bot.message_handler(commands=['upload'])
@@ -249,7 +308,7 @@ def cmd_upload(message):
 @bot.message_handler(func=lambda m: user_data.get(m.chat.id, {}).get('state') == 'SEARCH')
 def bot_search(message):
     res = requests.get(f"https://api.themoviedb.org/3/search/movie?api_key={TMDB_API_KEY}&query={message.text}").json()
-    if not res.get('results'): bot.send_message(message.chat.id, "❌ Not Found!"); return
+    if not res.get('results'): bot.send_message(message.chat.id, "❌ Not found!"); return
     markup = types.InlineKeyboardMarkup()
     for m in res['results'][:5]: markup.add(types.InlineKeyboardButton(f"{m['title']} ({m.get('release_date','0000')[:4]})", callback_data=f"sel_{m['id']}"))
     bot.send_message(message.chat.id, "✅ Select Movie:", reply_markup=markup)
@@ -265,13 +324,13 @@ def bot_select(call):
 @bot.message_handler(func=lambda m: user_data.get(m.chat.id, {}).get('state') == 'LANG')
 def bot_lang(message):
     user_data[message.chat.id]['lang'] = message.text; user_data[message.chat.id]['state'] = 'FILE'
-    bot.send_message(message.chat.id, "📁 Send Video File (Up to 4GB):")
+    bot.send_message(message.chat.id, "📁 Send the Video File (Max 4GB):")
 
 @bot.message_handler(content_types=['video', 'document'])
 def bot_file(message):
     cid = message.chat.id
     if user_data.get(cid, {}).get('state') == 'FILE':
-        bot.send_message(cid, "🚀 Uploading to GDrive..."); service, folder_id = get_active_drive_service()
+        bot.send_message(cid, "🚀 File detected! Streaming to Google Drive..."); service, folder_id = get_active_drive_service()
         try:
             file_info = bot.get_file(message.video.file_id if message.content_type == 'video' else message.document.file_id)
             file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
@@ -283,7 +342,7 @@ def bot_file(message):
             drive_file = service.files().create(body={'name': user_data[cid]['title'], 'parents': [folder_id]}, media_body=media, fields='id, webViewLink').execute()
             service.permissions().create(fileId=drive_file['id'], body={'type': 'anyone', 'role': 'viewer'}).execute()
             movies_col.insert_one({"title": user_data[cid]['title'], "year": user_data[cid]['year'], "poster": user_data[cid]['poster'], "backdrop": user_data[cid]['backdrop'], "language": user_data[cid]['lang'], "video_url": drive_file['webViewLink'], "likes": 0})
-            bot.send_message(cid, f"✅ SUCCESS!"); os.remove(tmp_path)
+            bot.send_message(cid, f"✅ SUCCESS! '{user_data[cid]['title']}' added."); os.remove(tmp_path)
         except Exception as e: bot.send_message(cid, f"❌ ERROR: {e}")
         user_data[cid] = {}
 
