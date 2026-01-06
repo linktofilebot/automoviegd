@@ -23,7 +23,7 @@ BOT_TOKEN = "8589295170:AAHSsqlS6Zp_c-xsIAqZOv6zNiU2m_U6cro"
 app.secret_key = os.environ.get("SECRET_KEY", "moviebox_ultra_master_2026_premium")
 
 # ডাটাবেস ও এপিআই সেটিংস
-MONGO_URI = "mongodb+srv://Demo270:Demo270@cluster0.ls1igsg.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+MONGO_URI = "mongodb+srv://mesohas358:mesohas358@cluster0.6kxy1vc.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
 TMDB_API_KEY = "7dc544d9253bccc3cfecc1c677f69819"
 
 bot = telebot.TeleBot(BOT_TOKEN)
