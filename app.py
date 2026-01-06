@@ -65,7 +65,7 @@ def get_active_drive_service():
         except: return None, None
     return None, None
 
-# --- ৩. প্রিমিয়াম লাইটিং CSS (Extreme Premium) ---
+# --- ৩. প্রিমিয়াম লাইটিং CSS ---
 CSS = """
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
@@ -97,13 +97,18 @@ CSS = """
     iframe, video { width: 100%; border-radius: 20px; background: #000; aspect-ratio: 16/9; box-shadow: 0 0 50px rgba(0,0,0,1); }
     input, select, textarea { width: 100%; padding: 15px; margin: 12px 0; background: #111; border: 1px solid #333; color: #fff; border-radius: 10px; }
     .badge-active { background: #00ff00; color: #000; padding: 4px 12px; border-radius: 20px; font-size: 11px; font-weight: 800; box-shadow: 0 0 15px #00ff00; }
+    .ep-link { display: block; padding: 15px; background: #1a1a1a; margin-top: 10px; border-radius: 10px; text-decoration: none; color: #fff; border-left: 4px solid var(--neon); transition: 0.3s; }
+    .ep-link:hover { background: #252525; transform: translateX(10px); }
 </style>
 """
 
 # --- ৪. ফ্রন্টএন্ড রাউটস ---
 
-@app.route('/')
+@app.route('/', methods=['GET', 'POST'])
 def index():
+    if request.method == 'POST':
+        return "OK", 200 # এরর ফিক্স করার জন্য POST হ্যান্ডলার যোগ করা হয়েছে
+    
     query = request.args.get('q')
     s = get_config()
     otts, cats = list(ott_col.find()), list(categories_col.find())
@@ -135,19 +140,44 @@ def content_detail(id):
     m = movies_col.find_one({"_id": ObjectId(id)})
     if not m: return redirect('/')
     eps = list(episodes_col.find({"series_id": id}).sort([("season", 1), ("episode", 1)]))
-    embed_url = m['video_url']
+    
+    # ইপিসোড ইউআরএল হ্যান্ডলিং
+    target_url = request.args.get('ep_url', m['video_url'])
+    embed_url = target_url
     if "drive.google.com" in embed_url:
-        try: file_id = embed_url.split("/d/")[1].split("/")[0]; embed_url = f"https://drive.google.com/file/d/{file_id}/preview"
+        try:
+            if "/file/d/" in embed_url:
+                file_id = embed_url.split("/d/")[1].split("/")[0]
+            else:
+                file_id = embed_url.split("id=")[1].split("&")[0]
+            embed_url = f"https://drive.google.com/file/d/{file_id}/preview"
         except: pass
-    return render_template_string(DETAIL_HTML, m=m, eps=eps, embed_url=embed_url, is_drive=("drive.google.com" in m['video_url']), s=get_config())
+        
+    return render_template_string(DETAIL_HTML, m=m, eps=eps, embed_url=embed_url, is_drive=("drive.google.com" in embed_url), s=get_config())
 
 DETAIL_HTML = CSS + """
 <nav class="nav"><a href="javascript:history.back()" style="position:absolute; left:20px; color:#fff; font-size:24px;"><i class="fas fa-chevron-left"></i></a><a href="/" class="logo">{{ s.site_name }}</a></nav>
 <div class="container" style="max-width:1100px;">
-    {% if is_drive %}<iframe src="{{ embed_url }}" width="100%" height="450" allow="autoplay" style="border-radius:20px; background:#000; border:none;"></iframe>
-    {% else %}<video id="vBox" controls poster="{{ m.backdrop }}"><source src="{{ m.video_url }}" type="video/mp4"></video>{% endif %}
+    {% if is_drive %}
+    <iframe src="{{ embed_url }}" width="100%" height="450" allow="autoplay" style="border-radius:20px; background:#000; border:none;"></iframe>
+    {% else %}
+    <video id="vBox" controls poster="{{ m.backdrop }}" style="width:100%;"><source src="{{ embed_url }}" type="video/mp4"></video>
+    {% endif %}
+    
     <h1 style="font-size:32px; letter-spacing:1px; margin-top:20px;">{{ m.title }} ({{ m.year }})</h1>
-    <button onclick="window.open('{{ s.ad_link }}'); window.location.href='{{ m.video_url }}'" class="btn-main" style="margin-top:30px; height:70px; font-size:22px;">📥 DOWNLOAD NOW</button>
+    
+    {% if eps %}
+    <div style="margin-top:30px;">
+        <h3 style="color:var(--neon); border-bottom:1px solid #333; padding-bottom:10px;">EPISODES LIST</h3>
+        {% for e in eps %}
+        <a href="/content/{{ m._id }}?ep_url={{ e.video_url }}" class="ep-link">
+            <i class="fas fa-play-circle" style="margin-right:10px;"></i> Season {{ e.season }} - Episode {{ e.episode }}
+        </a>
+        {% endfor %}
+    </div>
+    {% endif %}
+
+    <button onclick="window.open('{{ s.ad_link }}'); window.location.href='{{ embed_url }}'" class="btn-main" style="margin-top:30px; height:70px; font-size:22px;">📥 DOWNLOAD NOW</button>
 </div>
 """
 
@@ -181,13 +211,6 @@ ADMIN_HTML = CSS + """
         <div class="stat-card" style="flex:1;"><b>{{ counts.series }}</b><br><span>SERIES</span></div>
     </div>
 
-    <!-- ড্রাইভ ম্যানেজার -->
-    <div id="driveBox" class="sec-box">
-        <h3 style="color:var(--neon);">☁️ GOOGLE DRIVE MANAGEMENT</h3>
-        <form action="/add_gdrive" method="POST"><textarea name="json_data" rows="5" placeholder="Service Account JSON" required></textarea><input type="text" name="folder_id" placeholder="Folder ID" required><button class="btn-main">CONNECT DRIVE</button></form>
-        {% for g in gdrives %}<div style="padding:15px; border:1px solid #333; margin-top:15px; display:flex; justify-content:space-between; align-items:center;"><div>Folder: {{ g.folder_id }} {% if g.status == 'active' %}<span class="badge-active">ACTIVE</span>{% endif %}</div><div><a href="/activate_gdrive/{{ g._id }}" style="color:cyan;">Activate</a> | <a href="/del_gdrive/{{ g._id }}" style="color:red;">Delete</a></div></div>{% endfor %}
-    </div>
-
     <!-- কন্টেন্ট ম্যানেজার -->
     <div id="manageBox" class="sec-box" style="display:block;">
         <h3>🎬 DATABASE SEARCH</h3>
@@ -197,29 +220,20 @@ ADMIN_HTML = CSS + """
         </div>
     </div>
 
-    <!-- ইপিসোড ম্যানেজার -->
-    <div id="epManageBox" class="sec-box">
-        <h3>📂 EPISODE CONTROL</h3>
-        <select id="sSel" onchange="loadEps(this.value)" style="background:#000; border-color:var(--neon);"><option value="">-- SELECT SERIES --</option>{% for m in movies if m.type == 'series' %}<option value="{{ m._id }}">{{ m.title }}</option>{% endfor %}</select>
-        <div id="epList" style="margin-top:25px;"></div>
-    </div>
-
     <!-- সেটিংস এবং সিকিউরিটি -->
     <div id="setBox" class="sec-box">
         <form action="/update_admin" method="POST"><label>ADMIN USER</label><input type="text" name="new_user" value="{{ a.user }}"><label>ADMIN PASS</label><input type="text" name="new_pass" value="{{ a.pass }}"><button class="btn-main">UPDATE LOGIN</button></form>
-        <form action="/update_settings" method="POST" style="margin-top:30px;"><label>SITE NAME</label><input type="text" name="site_name" value="{{ s.site_name }}"><label>AD LINK</label><input type="text" name="ad_link" value="{{ s.ad_link }}"><button class="btn-main">SAVE SETTINGS</button></form>
-    </div>
-
-    <!-- OTT, Category, Language -->
-    <div id="ottBox" class="sec-box">
-        <form action="/add_ott" method="POST"><input type="text" name="name" placeholder="OTT Name"><input type="text" name="logo" placeholder="Logo URL"><button class="btn-main">Add OTT</button></form>
-        <form action="/add_cat" method="POST" style="margin-top:20px;"><input type="text" name="name" placeholder="New Category"><button class="btn-main">Add Category</button></form>
+        <form action="/update_settings" method="POST" style="margin-top:30px;">
+            <label>SITE NAME</label><input type="text" name="site_name" value="{{ s.site_name }}">
+            <label>NOTICE TEXT</label><input type="text" name="notice_text" value="{{ s.notice_text }}">
+            <label>AD LINK</label><input type="text" name="ad_link" value="{{ s.ad_link }}">
+            <button class="btn-main">SAVE SETTINGS</button>
+        </form>
     </div>
 </div>
 <script>
     function openSec(id){ document.querySelectorAll('.sec-box').forEach(s=>s.style.display='none'); document.getElementById(id).style.display='block'; document.getElementById('drw').classList.remove('active'); }
     function filterBulk(){ let q=document.getElementById('bulkSch').value.toLowerCase(); document.querySelectorAll('.b-item').forEach(i=>i.style.display=i.innerText.toLowerCase().includes(q)?'flex':'none'); }
-    async function loadEps(sid){ if(!sid) return; let r = await fetch('/api/episodes/'+sid); let data = await r.json(); let div = document.getElementById('epList'); div.innerHTML = ''; data.forEach(e => { div.innerHTML += `<div style="padding:15px; border-bottom:1px solid #222; display:flex; justify-content:space-between; background:#111;"><span>S${e.season} E${e.episode}</span><a href="/del_ep/${e._id}" style="color:red;">REMOVE</a></div>`; }); }
 </script>
 """
 
@@ -231,45 +245,13 @@ def login():
     if request.form['u'] == creds['user'] and request.form['p'] == creds['pass']: session['auth'] = True; return redirect('/admin')
     return "Invalid"
 
+@app.route('/logout')
+def logout():
+    session.clear(); return redirect('/admin')
+
 @app.route('/update_admin', methods=['POST'])
 def update_admin():
     if session.get('auth'): settings_col.update_one({"type": "admin_creds"}, {"$set": {"user": request.form.get('new_user'), "pass": request.form.get('new_pass')}})
-    return redirect('/admin')
-
-@app.route('/del_movie/<id>')
-def del_movie(id):
-    if session.get('auth'): movies_col.delete_one({"_id": ObjectId(id)}); episodes_col.delete_many({"series_id": id})
-    return redirect('/admin')
-
-@app.route('/api/episodes/<sid>')
-def get_eps_api(sid):
-    eps = list(episodes_col.find({"series_id": sid}).sort([("season", 1), ("episode", 1)]))
-    for e in eps: e['_id'] = str(e['_id'])
-    return jsonify(eps)
-
-@app.route('/add_gdrive', methods=['POST'])
-def add_gdrive():
-    if session.get('auth'): gdrive_col.insert_one({"json_data": request.form.get('json_data'), "folder_id": request.form.get('folder_id'), "status": "inactive"})
-    return redirect('/admin')
-
-@app.route('/activate_gdrive/<id>')
-def activate_gdrive(id):
-    if session.get('auth'): gdrive_col.update_many({}, {"$set": {"status": "inactive"}}); gdrive_col.update_one({"_id": ObjectId(id)}, {"$set": {"status": "active"}})
-    return redirect('/admin')
-
-@app.route('/del_gdrive/<id>')
-def del_gdrive(id):
-    if session.get('auth'): gdrive_col.delete_one({"_id": ObjectId(id)})
-    return redirect('/admin')
-
-@app.route('/add_ott', methods=['POST'])
-def add_ott():
-    if session.get('auth'): ott_col.insert_one({"name": request.form.get('name'), "logo": request.form.get('logo')})
-    return redirect('/admin')
-
-@app.route('/add_cat', methods=['POST'])
-def add_cat():
-    if session.get('auth'): categories_col.insert_one({"name": request.form.get('name')})
     return redirect('/admin')
 
 @app.route('/update_settings', methods=['POST'])
@@ -277,12 +259,12 @@ def update_settings():
     if session.get('auth'): settings_col.update_one({"type": "config"}, {"$set": {"site_name": request.form.get('site_name'), "ad_link": request.form.get('ad_link'), "notice_text": request.form.get('notice_text')}})
     return redirect('/admin')
 
-@app.route('/del_ep/<id>')
-def del_ep(id):
-    if session.get('auth'): episodes_col.delete_one({"_id": ObjectId(id)})
+@app.route('/del_movie/<id>')
+def del_movie(id):
+    if session.get('auth'): movies_col.delete_one({"_id": ObjectId(id)}); episodes_col.delete_many({"series_id": id})
     return redirect('/admin')
 
-# --- ৭. টেলিগ্রাম বট (WEBHOOK Support) ---
+# --- ৭. টেলিগ্রাম বট ---
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def get_webhook_update():
@@ -324,7 +306,7 @@ def bot_select(call):
 @bot.message_handler(func=lambda m: user_data.get(m.chat.id, {}).get('state') == 'LANG')
 def bot_lang(message):
     user_data[message.chat.id]['lang'] = message.text; user_data[message.chat.id]['state'] = 'FILE'
-    bot.send_message(message.chat.id, "📁 Send the Video File (Max 4GB):")
+    bot.send_message(message.chat.id, "📁 Send the Video File (Max 20MB via Bot API):")
 
 @bot.message_handler(content_types=['video', 'document'])
 def bot_file(message):
@@ -332,7 +314,8 @@ def bot_file(message):
     if user_data.get(cid, {}).get('state') == 'FILE':
         bot.send_message(cid, "🚀 File detected! Streaming to Google Drive..."); service, folder_id = get_active_drive_service()
         try:
-            file_info = bot.get_file(message.video.file_id if message.content_type == 'video' else message.document.file_id)
+            file_id = message.video.file_id if message.content_type == 'video' else message.document.file_id
+            file_info = bot.get_file(file_id)
             file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file_info.file_path}"
             with tempfile.NamedTemporaryFile(delete=False) as tmp:
                 r = requests.get(file_url, stream=True)
@@ -341,10 +324,10 @@ def bot_file(message):
             media = MediaFileUpload(tmp_path, mimetype='video/mp4', resumable=True)
             drive_file = service.files().create(body={'name': user_data[cid]['title'], 'parents': [folder_id]}, media_body=media, fields='id, webViewLink').execute()
             service.permissions().create(fileId=drive_file['id'], body={'type': 'anyone', 'role': 'viewer'}).execute()
-            movies_col.insert_one({"title": user_data[cid]['title'], "year": user_data[cid]['year'], "poster": user_data[cid]['poster'], "backdrop": user_data[cid]['backdrop'], "language": user_data[cid]['lang'], "video_url": drive_file['webViewLink'], "likes": 0})
+            movies_col.insert_one({"type": "movie", "title": user_data[cid]['title'], "year": user_data[cid]['year'], "poster": user_data[cid]['poster'], "backdrop": user_data[cid]['backdrop'], "language": user_data[cid]['lang'], "video_url": drive_file['webViewLink']})
             bot.send_message(cid, f"✅ SUCCESS! '{user_data[cid]['title']}' added."); os.remove(tmp_path)
         except Exception as e: bot.send_message(cid, f"❌ ERROR: {e}")
         user_data[cid] = {}
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    app.run(host='0.0.0.0', port=10000)
