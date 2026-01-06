@@ -1,0 +1,9 @@
+Flask
+pymongo
+dnspython
+requests
+cloudinary
+pyTelegramBotAPI
+google-api-python-client
+google-auth
+gunicorn
