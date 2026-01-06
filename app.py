@@ -1,3 +1,7 @@
+# ১. সবার আগে eventlet monkey patch (অবশ্যই সবার উপরে থাকবে)
+import eventlet
+eventlet.monkey_patch()
+
 import os
 from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO, emit
@@ -5,50 +9,55 @@ from pymongo import MongoClient
 
 # --- অ্যাপ সেটআপ ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'super-secret-key-123'
-# async_mode='eventlet' বা 'threading' ব্যবহার করা যেতে পারে
+app.config['SECRET_KEY'] = 'video-call-secure-key-2026'
+# async_mode হিসেবে eventlet ব্যবহার করা হয়েছে
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # --- মোঙ্গোডিবি (MongoDB) কানেকশন ---
-# আপনার আসল MongoDB URI এখানে দিন। ইউজার ও পাসওয়ার্ড ঠিক আছে কি না নিশ্চিত করুন।
+# এখানে আপনার আসল MongoDB URI দিবেন
 MONGO_URI = "mongodb+srv://Demo270:Demo270@cluster0.ls1igsg.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0" 
 
-# গ্লোবাল ভেরিয়েবল
 users_collection = None
 
 try:
+    # কানেকশন করার চেষ্টা
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    # কানেকশন টেস্ট করার জন্য
-    client.admin.command('ping')
     db = client['video_call_system']
     users_collection = db['users']
+    # কানেকশন টেস্ট
+    client.admin.command('ping')
     print("✅ MongoDB Connected Successfully!")
 except Exception as e:
     print(f"❌ Database Connection Error: {e}")
 
-# --- ফ্রন্টএন্ড কোড ---
+# --- ফ্রন্টএন্ড কোড (HTML/CSS/JS) ---
 html_content = """
 <!DOCTYPE html>
 <html lang="bn">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>প্রাইভেট ভিডিও কলিং</title>
+    <title>প্রাইভেট ভিডিও ও অডিও কল</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         :root { --primary: #6c5ce7; --success: #2ed573; --danger: #ff4757; }
         body { font-family: 'Segoe UI', sans-serif; background: #f1f2f6; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+        
         .hidden { display: none !important; }
+        
         .card { background: white; width: 95%; max-width: 400px; padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; }
-        input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #edeff2; border-radius: 12px; font-size: 16px; box-sizing: border-box; outline: none; }
-        button { width: 100%; padding: 12px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 10px; color: white; font-size: 16px; transition: 0.3s; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #edeff2; border-radius: 12px; font-size: 16px; box-sizing: border-box; outline: none; transition: 0.3s; }
+        input:focus { border-color: var(--primary); }
+        button { width: 100%; padding: 12px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 10px; color: white; font-size: 16px; }
+        
         .btn-login { background: var(--primary); }
-        .btn-login:hover { opacity: 0.8; }
         .btn-video { background: var(--success); }
         .btn-audio { background: #1e90ff; }
         .btn-hangup { background: var(--danger); }
+        
         .video-box { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
         video { width: 100%; background: #000; border-radius: 12px; transform: scaleX(-1); }
+        
         .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; }
         .status-dot { height: 10px; width: 10px; background-color: var(--success); border-radius: 50%; display: inline-block; margin-right: 5px; }
         .link-text { color: var(--primary); cursor: pointer; text-decoration: underline; display: block; margin-top: 15px; font-size: 14px; }
@@ -59,28 +68,28 @@ html_content = """
     <audio id="audioRing" src="https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3" loop></audio>
     <audio id="videoRing" src="https://www.soundjay.com/phone/phone-calling-1.mp3" loop></audio>
 
-    <!-- রেজিস্ট্রেশন বক্স -->
+    <!-- ১. রেজিস্ট্রেশন বক্স -->
     <div class="card" id="registerBox">
         <h2 style="color: var(--primary);">একাউন্ট তৈরি করুন</h2>
-        <input type="number" id="regPhone" placeholder="মোবাইল নাম্বার (উদা: 017...)">
-        <input type="password" id="regPin" placeholder="৫ ডিজিটের পিন" maxlength="5">
+        <input type="number" id="regPhone" placeholder="মোবাইল নাম্বার">
+        <input type="password" id="regPin" placeholder="৫ ডিজিটের সিক্রেট পিন" maxlength="5">
         <button class="btn-login" onclick="registerAccount()">একাউন্ট খুলুন</button>
         <span class="link-text" onclick="showLogin()">ইতিমধ্যে একাউন্ট আছে? লগইন করুন</span>
     </div>
 
-    <!-- লগইন বক্স -->
+    <!-- ২. লগইন বক্স -->
     <div class="card hidden" id="loginBox">
         <h2 style="color: var(--primary);">লগইন করুন</h2>
         <input type="number" id="loginPhone" placeholder="মোবাইল নাম্বার">
-        <input type="password" id="loginPin" placeholder="পিন কোড">
+        <input type="password" id="loginPin" placeholder="পিন কোড দিন">
         <button class="btn-login" onclick="login()">লগইন করুন</button>
         <span class="link-text" onclick="showRegister()">নতুন একাউন্ট তৈরি করুন</span>
     </div>
 
-    <!-- ড্যাশবোর্ড -->
+    <!-- ৩. মেইন ড্যাশবোর্ড -->
     <div class="card hidden" id="dashboard">
         <div style="margin-bottom: 15px;">
-            <span class="status-dot"></span> আপনার আইডি: <b id="myIdDisplay"></b>
+            <span class="status-dot"></span> আইডি: <b id="myIdDisplay"></b>
         </div>
         <input type="number" id="searchId" placeholder="বন্ধুর নাম্বার লিখুন">
         <div style="display: flex; gap: 10px;">
@@ -98,7 +107,7 @@ html_content = """
         </div>
     </div>
 
-    <!-- ইনকামিং পপআপ -->
+    <!-- ৪. ইনকামিং কল পপআপ -->
     <div id="incomingPopup" class="overlay hidden">
         <h1 id="callerIdHead">017XXXXXXXX</h1>
         <p id="callTypeHead">কল দিচ্ছে...</p>
@@ -117,18 +126,16 @@ html_content = """
             document.getElementById('registerBox').classList.add('hidden');
             document.getElementById('loginBox').classList.remove('hidden');
         }
-
         function showRegister() {
             document.getElementById('loginBox').classList.add('hidden');
             document.getElementById('registerBox').classList.remove('hidden');
         }
 
-        // একাউন্ট তৈরি
         function registerAccount() {
             const phone = document.getElementById('regPhone').value.trim();
             const pin = document.getElementById('regPin').value.trim();
-            if (phone.length < 5 || pin.length !== 5) return alert("সঠিক নাম্বার ও ৫ ডিজিট পিন দিন");
-            socket.emit('register_new_user', { phone: phone, pin: pin });
+            if (phone.length < 5 || pin.length !== 5) return alert("সঠিক নাম্বার ও ৫ ডিজিটের পিন দিন");
+            socket.emit('register_new_user', { phone, pin });
         }
 
         socket.on('register_response', data => {
@@ -136,19 +143,17 @@ html_content = """
             if (data.status === 'success') showLogin();
         });
 
-        // লগইন
         function login() {
             const phone = document.getElementById('loginPhone').value.trim();
             const pin = document.getElementById('loginPin').value.trim();
             if (!phone || !pin) return alert("তথ্য দিন");
-            socket.emit('login_user', { phone: phone, pin: pin });
+            socket.emit('login_user', { phone, pin });
         }
 
         socket.on('login_response', data => {
             if (data.status === 'success') {
                 myId = data.phone;
                 document.getElementById('loginBox').classList.add('hidden');
-                document.getElementById('registerBox').classList.add('hidden');
                 document.getElementById('dashboard').classList.remove('hidden');
                 document.getElementById('myIdDisplay').innerText = myId;
             } else {
@@ -156,7 +161,6 @@ html_content = """
             }
         });
 
-        // ভিডিও কল শুরু
         async function initiateCall(type) {
             const target = document.getElementById('searchId').value.trim();
             if (!target || target === myId) return alert("সঠিক নাম্বার দিন");
@@ -180,11 +184,10 @@ html_content = """
                 await peerConnection.setLocalDescription(offer);
                 socket.emit('signal_data', { to: target, offer: offer, from: myId, type: type });
             } catch (err) {
-                alert("ক্যামেরা/মাইক্রোফোন পারমিশন দিন!");
+                alert("ক্যামেরা বা মাইক্রোফোন এক্সেস দিন!");
             }
         }
 
-        // সিগন্যাল রিসিভ
         socket.on('signal_data', async (data) => {
             if (data.offer) {
                 currentOffer = data;
@@ -205,10 +208,7 @@ html_content = """
             document.getElementById('incomingPopup').classList.add('hidden');
             document.getElementById('callInterface').classList.remove('hidden');
 
-            localStream = await navigator.mediaDevices.getUserMedia({ 
-                video: currentOffer.type === 'video', 
-                audio: true 
-            });
+            localStream = await navigator.mediaDevices.getUserMedia({ video: currentOffer.type === 'video', audio: true });
             document.getElementById('localVideo').srcObject = localStream;
 
             peerConnection = new RTCPeerConnection(rtcConfig);
@@ -227,10 +227,7 @@ html_content = """
             socket.emit('signal_data', { to: currentOffer.from, answer: answer, from: myId });
         }
 
-        function endCall() {
-            location.reload();
-        }
-
+        function endCall() { location.reload(); }
         socket.on('error_msg', msg => alert(msg));
     </script>
 </body>
@@ -248,47 +245,29 @@ def register_new_user(data):
     if users_collection is None:
         emit('register_response', {'status': 'error', 'message': 'ডেটাবেস সংযুক্ত নয়!'})
         return
-
     phone = str(data.get('phone'))
     pin = str(data.get('pin'))
-    
-    print(f"Registration Attempt: {phone}")
-    
     try:
         existing_user = users_collection.find_one({"phone": phone})
         if existing_user:
             emit('register_response', {'status': 'error', 'message': 'এই নাম্বার ইতিমধ্যে আছে!'})
         else:
-            users_collection.insert_one({
-                "phone": phone, 
-                "pin": pin, 
-                "socket_id": request.sid, 
-                "status": "offline"
-            })
-            emit('register_response', {'status': 'success', 'message': 'একাউন্ট তৈরি সফল হয়েছে! লগইন করুন।'})
-            print(f"Registration Success: {phone}")
+            users_collection.insert_one({"phone": phone, "pin": pin, "socket_id": request.sid, "status": "offline"})
+            emit('register_response', {'status': 'success', 'message': 'একাউন্ট তৈরি সফল! লগইন করুন।'})
     except Exception as e:
-        print(f"Reg Error: {e}")
         emit('register_response', {'status': 'error', 'message': 'সার্ভার সমস্যা!'})
 
 @socketio.on('login_user')
 def login_user(data):
     if users_collection is None:
-        emit('login_response', {'status': 'error', 'message': 'ডেটাবেস সংযুক্ত নয়!'})
         return
-
     phone = str(data.get('phone'))
     pin = str(data.get('pin'))
-    
-    print(f"Login Attempt: {phone}")
-    
     try:
         user = users_collection.find_one({"phone": phone, "pin": pin})
         if user:
             users_collection.update_one({"phone": phone}, {"$set": {"socket_id": request.sid, "status": "online"}})
-            emit('login_status', {'status': 'success', 'phone': phone}) # JS logic fix: login_response
             emit('login_response', {'status': 'success', 'phone': phone})
-            print(f"Login Success: {phone}")
         else:
             emit('login_response', {'status': 'error', 'message': 'ভুল নাম্বার বা পিন!'})
     except Exception as e:
@@ -296,6 +275,7 @@ def login_user(data):
 
 @socketio.on('signal_data')
 def signal(data):
+    if users_collection is None: return
     target_phone = str(data.get('to'))
     user = users_collection.find_one({"phone": target_phone})
     if user and user['status'] == 'online':
@@ -303,9 +283,11 @@ def signal(data):
     else:
         emit('error_msg', "ইউজার অফলাইন!", room=request.sid)
 
+# ডিসকানেক্ট ফাংশন ফিক্স করা হয়েছে (আর্গুমেন্ট গ্রহণ করার জন্য)
 @socketio.on('disconnect')
-def disconnect():
-    if users_collection:
+def disconnect(*args):
+    # 'if users_collection:' এর পরিবর্তে 'is not None' চেক করা হয়েছে
+    if users_collection is not None:
         users_collection.update_one({"socket_id": request.sid}, {"$set": {"status": "offline"}})
 
 if __name__ == '__main__':
