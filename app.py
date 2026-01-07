@@ -11,7 +11,7 @@ from bson import json_util, ObjectId
 
 # --- অ্যাপ কনফিগারেশন ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'imo-pro-premium-v4-2026'
+app.config['SECRET_KEY'] = 'imo-ultra-pro-master-2026'
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', max_http_buffer_size=10**7) 
 
 # --- ডাটাবেস কানেকশন ---
@@ -26,7 +26,7 @@ try:
     client.admin.command('ping')
     print("✅ MongoDB Connected Successfully!")
 except Exception as e:
-    print(f"❌ DB Error: {e}")
+    print(f"❌ DB Connection Error: {e}")
 
 # --- ফ্রন্টএন্ড UI ---
 html_content = """
@@ -35,7 +35,7 @@ html_content = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Imo Pro Premium V4</title>
+    <title>Imo Pro Premium Master</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
         :root { --main: #0984e3; --dark: #2d3436; --bg: #f5f6fa; --white: #ffffff; --green: #00b894; --danger: #d63031; --shadow: 0 4px 15px rgba(0,0,0,0.1); }
@@ -44,48 +44,58 @@ html_content = """
         
         .app-container { width: 100%; max-width: 450px; background: var(--white); display: flex; flex-direction: column; position: relative; box-shadow: 0 0 30px rgba(0,0,0,0.2); }
         
-        /* Premium UI */
+        /* Auth Screen */
         .screen { padding: 40px 20px; text-align: center; height: 100%; overflow-y: auto; box-sizing: border-box; }
         .screen h1 { color: var(--main); font-size: 50px; margin-bottom: 5px; font-weight: 800; cursor: pointer; }
         input { width: 100%; padding: 15px; margin: 12px 0; border: 2px solid #eee; border-radius: 12px; font-size: 16px; outline: none; transition: 0.3s; }
-        input:focus { border-color: var(--main); }
         .btn { width: 100%; padding: 16px; border: none; border-radius: 12px; cursor: pointer; font-weight: bold; font-size: 16px; background: var(--main); color: white; box-shadow: var(--shadow); }
 
         header { background: var(--main); color: white; padding: 15px 20px; display: flex; justify-content: space-between; align-items: center; box-shadow: var(--shadow); z-index: 10; }
         .tabs { display: flex; background: var(--main); }
-        .tab { flex: 1; padding: 15px; text-align: center; color: rgba(255,255,255,0.7); cursor: pointer; font-weight: bold; font-size: 13px; transition: 0.3s; }
+        .tab { flex: 1; padding: 15px; text-align: center; color: rgba(255,255,255,0.7); cursor: pointer; font-weight: bold; font-size: 13px; }
         .tab.active { color: white; border-bottom: 4px solid white; background: rgba(255,255,255,0.1); }
 
         .list-container { flex: 1; overflow-y: auto; background: var(--bg); }
-        .item { display: flex; align-items: center; padding: 15px; background: var(--white); margin-bottom: 1px; cursor: pointer; }
+        .item { display: flex; align-items: center; padding: 15px; background: var(--white); margin-bottom: 1px; cursor: pointer; transition: 0.2s; }
         .avatar { width: 50px; height: 50px; border-radius: 50%; background: #dfe6e9; margin-right: 15px; display: flex; align-items: center; justify-content: center; font-size: 20px; font-weight: bold; color: var(--main); background-size: cover; background-position: center; border: 2px solid #eee; overflow: hidden; }
-        .avatar img { width: 100%; height: 100%; object-fit: cover; }
-        
-        /* Chat & Messages */
+        .item-info { flex: 1; }
+        .item-info b { font-size: 16px; color: var(--dark); }
+        .item-info span { font-size: 12px; color: #636e72; }
+
+        /* Profile Overlay */
+        .profile-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); z-index: 2000; display: flex; flex-direction: column; align-items: center; padding-top: 50px; transform: translateY(100%); transition: 0.3s ease; }
+        .profile-overlay.open { transform: translateY(0); }
+        .profile-card { width: 85%; background: white; border-radius: 20px; padding: 30px; text-align: center; box-shadow: var(--shadow); }
+        .profile-avatar { width: 120px; height: 120px; border-radius: 50%; border: 5px solid var(--main); margin-bottom: 20px; object-fit: cover; }
+
+        /* Chat UI */
         #chatView { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #f0f2f5; z-index: 1000; display: flex; flex-direction: column; }
         .chat-header { background: var(--main); color: white; padding: 10px 15px; display: flex; align-items: center; gap: 12px; }
         .chat-msgs { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-        .msg { padding: 10px 15px; border-radius: 18px; max-width: 75%; font-size: 14px; position: relative; }
+        .msg { padding: 10px 15px; border-radius: 18px; max-width: 75%; font-size: 14px; position: relative; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
         .msg.sent { background: var(--main); color: white; align-self: flex-end; border-bottom-right-radius: 2px; }
         .msg.recv { background: white; color: var(--dark); align-self: flex-start; border-bottom-left-radius: 2px; }
-        .delete-btn { font-size: 10px; color: var(--danger); cursor: pointer; margin-top: 5px; text-align: right; display: block; }
+        .delete-btn { font-size: 9px; color: var(--danger); cursor: pointer; margin-top: 5px; display: block; text-decoration: underline; text-align: right; }
 
         .chat-footer { background: white; padding: 12px; display: flex; align-items: center; gap: 10px; border-top: 1px solid #eee; }
         .footer-input { flex: 1; background: #f1f2f6; border-radius: 30px; padding: 5px 15px; }
         .footer-input input { border: none; padding: 10px; width: 100%; background: transparent; outline: none; }
         
-        /* Profile Overlay */
-        .profile-overlay { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: var(--bg); z-index: 2000; display: flex; flex-direction: column; align-items: center; padding-top: 50px; transition: 0.3s; }
-        .profile-card { width: 85%; background: white; border-radius: 20px; padding: 30px; text-align: center; box-shadow: var(--shadow); }
-        .profile-avatar { width: 120px; height: 120px; border-radius: 50%; border: 5px solid var(--main); margin-bottom: 20px; object-fit: cover; }
+        .icon-btn { cursor: pointer; font-size: 24px; color: var(--main); }
+        .recording { color: var(--danger) !important; animation: pulse 1s infinite; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% { transform: scale(1); } }
 
-        /* Call Overlay */
+        /* Call Screen */
         .call-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #1e272e; z-index: 9999; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-        .video-box { width: 100%; height: 80%; position: relative; background: #000; }
+        .video-box { width: 100%; height: 75%; position: relative; background: #000; }
         #remoteVideo { width: 100%; height: 100%; object-fit: cover; }
-        #localVideo { width: 100px; height: 150px; position: absolute; bottom: 20px; right: 20px; border: 2px solid white; border-radius: 12px; z-index: 10; }
-        .call-btns { margin-top: 30px; display: flex; gap: 40px; }
-        .c-btn { width: 70px; height: 70px; border-radius: 50%; border: none; cursor: pointer; font-size: 30px; color: white; display: flex; align-items: center; justify-content: center; }
+        #localVideo { width: 100px; height: 140px; position: absolute; bottom: 20px; right: 20px; border: 2px solid white; border-radius: 12px; z-index: 10; object-fit: cover; }
+        
+        .call-controls { position: absolute; bottom: 40px; display: flex; gap: 20px; align-items: center; }
+        .c-btn { width: 60px; height: 60px; border-radius: 50%; border: none; font-size: 24px; cursor: pointer; color: white; display: flex; align-items: center; justify-content: center; transition: 0.3s; }
+        .btn-mute.off { background: #636e72; }
+        .btn-mute.on { background: rgba(255,255,255,0.2); }
+        .btn-hangup { background: var(--danger); width: 75px; height: 75px; font-size: 30px; }
     </style>
 </head>
 <body>
@@ -93,10 +103,11 @@ html_content = """
     <audio id="ringtone" src="https://www.soundjay.com/phone/phone-calling-1.mp3" loop></audio>
 
     <div class="app-container">
+        
         <!-- ১. অথ স্ক্রিন -->
         <div id="authScreen" class="screen">
             <h1>imo</h1>
-            <p style="color: #636e72;">প্রিমিয়াম কোয়ালিটি চ্যাট ও কলিং</p>
+            <p style="color: #636e72;">মাস্টার প্রিমিয়াম ভার্সন ২০২৬</p>
             <input type="number" id="authPhone" placeholder="মোবাইল নাম্বার">
             <input type="password" id="authPin" placeholder="৫ ডিজিট পিন">
             <button class="btn" onclick="auth()">শুরু করুন</button>
@@ -104,19 +115,19 @@ html_content = """
 
         <!-- ২. প্রোফাইল সেটআপ -->
         <div id="profileScreen" class="screen hidden">
-            <h2>আপনার প্রোফাইল সাজান</h2>
-            <div id="avatarPreview" class="avatar" style="width: 100px; height: 100px; margin: 0 auto 20px;">👤</div>
+            <h2>আপনার প্রোফাইল</h2>
+            <div id="avatarPreview" class="avatar" style="width: 120px; height: 120px; margin: 0 auto 20px; font-size: 40px;">👤</div>
             <input type="text" id="setupName" placeholder="আপনার নাম">
             <input type="file" id="avatarFile" accept="image/*" onchange="previewAvatar(event)">
             <button class="btn" onclick="saveProfile()">সম্পন্ন করুন</button>
         </div>
 
-        <!-- ৩. ড্যাশবোর্ড -->
+        <!-- ৩. মেইন ড্যাশবোর্ড -->
         <div id="mainDashboard" class="hidden" style="display: flex; flex-direction: column; height: 100%;">
             <header>
                 <div style="display: flex; align-items: center; gap: 10px;" onclick="viewMyProfile()">
                     <div id="headerAvatar" class="avatar" style="width:35px; height:35px; margin:0; font-size: 14px;">👤</div>
-                    <span>imo Pro</span>
+                    <span>imo Master</span>
                 </div>
                 <span onclick="logout()" style="font-size: 11px; opacity: 0.8; cursor: pointer;">LOGOUT</span>
             </header>
@@ -125,6 +136,7 @@ html_content = """
                 <div class="tab" onclick="switchTab('contacts', this)">CONTACTS</div>
                 <div class="tab" onclick="switchTab('calls', this)">CALLS</div>
             </div>
+            
             <div id="chatsTab" class="list-container"></div>
             <div id="contactsTab" class="list-container hidden">
                 <div style="padding: 15px; display: flex; gap: 10px;">
@@ -163,12 +175,12 @@ html_content = """
         </div>
 
         <!-- ৫. প্রোফাইল ওভারলে -->
-        <div id="profileOverlay" class="profile-overlay hidden">
+        <div id="profileOverlay" class="profile-overlay">
             <span onclick="closeProfile()" style="position: absolute; top: 20px; left: 20px; font-size: 30px; cursor: pointer;">←</span>
             <div class="profile-card">
                 <img id="pOverlayAv" src="" class="profile-avatar">
-                <h2 id="pOverlayName">ইউজার নেম</h2>
-                <p id="pOverlayPhone" style="color: var(--grey);"></p>
+                <h2 id="pOverlayName">ইউজার</h2>
+                <p id="pOverlayPhone" style="color: #636e72;"></p>
                 <div id="pOverlayStatus" style="margin-top: 10px; font-weight: bold;"></div>
             </div>
         </div>
@@ -181,20 +193,25 @@ html_content = """
                 <video id="remoteVideo" autoplay playsinline></video>
                 <video id="localVideo" autoplay playsinline muted></video>
             </div>
-            <div class="call-btns">
-                <button id="btnAccept" class="c-btn" style="background: var(--green);" onclick="acceptCall()">📞</button>
-                <button class="c-btn" style="background: var(--danger);" onclick="endCall(true)">✖</button>
+            
+            <div class="call-controls">
+                <button id="btnMuteAudio" class="c-btn btn-mute on" onclick="toggleAudio()">🎙️</button>
+                <button id="btnAccept" class="c-btn" style="background: var(--green); display:none;" onclick="acceptCall()">📞</button>
+                <button class="c-btn btn-hangup" onclick="endCall(true)">✖</button>
+                <button id="btnMuteVideo" class="c-btn btn-mute on" onclick="toggleVideo()">📷</button>
             </div>
         </div>
+
     </div>
 
     <script>
         const socket = io();
         let myData = null, activeChat = null, peerConn = null, localStream = null, typingTimeout;
         let mediaRecorder, voiceChunks = [];
+        let isAudioMuted = false, isVideoOff = false;
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-        // সেশন অটো-লগইন
+        // --- Auth & Session ---
         window.onload = () => {
             const saved = localStorage.getItem('imo_v3_session');
             if (saved) socket.emit('auto_login', JSON.parse(saved));
@@ -227,20 +244,26 @@ html_content = """
             socket.emit('get_chat_list', { phone: myData.phone });
         }
 
-        function switchTab(tab, el) {
-            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
-            el.classList.add('active');
-            document.getElementById('chatsTab').classList.toggle('hidden', tab !== 'chats');
-            document.getElementById('contactsTab').classList.toggle('hidden', tab !== 'contacts');
-            document.getElementById('callsTab').classList.toggle('hidden', tab !== 'calls');
-            if(tab === 'calls') socket.emit('get_call_history', { phone: myData.phone });
-        }
+        // --- Profile View ---
+        function viewMyProfile() { renderProfile(myData); }
+        function viewFriendProfile() { if(activeChat) socket.emit('get_user_profile', { phone: activeChat.phone }); }
+        socket.on('user_profile_data', user => renderProfile(user));
 
-        // --- চ্যাট ও মেসেজ ---
+        function renderProfile(user) {
+            document.getElementById('profileOverlay').classList.add('open');
+            document.getElementById('pOverlayName').innerText = user.name || 'User';
+            document.getElementById('pOverlayPhone').innerText = user.phone;
+            document.getElementById('pOverlayAv').src = user.avatar || 'https://via.placeholder.com/150?text=👤';
+            document.getElementById('pOverlayStatus').innerText = user.status === 'online' ? '● Online' : '○ Offline';
+            document.getElementById('pOverlayStatus').style.color = user.status === 'online' ? 'var(--green)' : '#636e72';
+        }
+        function closeProfile() { document.getElementById('profileOverlay').classList.remove('open'); }
+
+        // --- Chat & Messages ---
         function openChat(phone, name, avatar) {
             activeChat = { phone, name, avatar };
             document.getElementById('chatView').classList.remove('hidden');
-            document.getElementById('chatName').innerText = name;
+            document.getElementById('chatName').innerText = name || phone;
             document.getElementById('chatAvatar').src = avatar || 'https://via.placeholder.com/35?text=👤';
             document.getElementById('chatBox').innerHTML = "";
             socket.emit('get_messages', { from: myData.phone, to: phone });
@@ -250,8 +273,7 @@ html_content = """
 
         function appendMessage(data, side) {
             const box = document.getElementById('chatBox');
-            if(document.getElementById(`msg-${data._id}`)) return; // ডুপ্লিকেট মেসেজ রোধ
-            
+            if(document.getElementById(`msg-${data._id}`)) return;
             const div = document.createElement('div');
             div.className = `msg ${side}`;
             div.id = `msg-${data._id}`;
@@ -260,7 +282,7 @@ html_content = """
             else if (data.type === 'image') content = `<img src="${data.message}" style="max-width:100%; border-radius:12px;">`;
             else if (data.type === 'voice') content = `<audio src="${data.message}" controls style="width:100%;"></audio>`;
             
-            div.innerHTML = `${content} <span class="delete-btn" onclick="deleteMsg('${data._id}')">Delete</span>`;
+            div.innerHTML = `${content} <div class="delete-btn" onclick="deleteMsg('${data._id}')">Delete</div>`;
             box.appendChild(div);
             box.scrollTop = box.scrollHeight;
         }
@@ -268,22 +290,39 @@ html_content = """
         function deleteMsg(id) {
             if(confirm("মেসেজটি ডিলিট করতে চান?")) {
                 socket.emit('delete_msg', { msgId: id });
-                const el = document.getElementById(`msg-${id}`);
-                if(el) el.remove();
+                document.getElementById(`msg-${id}`).remove();
             }
         }
 
-        // --- ভিডিও/অডিও কল (FIXED) ---
+        // --- Call Controls ---
+        function toggleAudio() {
+            if(localStream) {
+                isAudioMuted = !isAudioMuted;
+                localStream.getAudioTracks()[0].enabled = !isAudioMuted;
+                document.getElementById('btnMuteAudio').innerText = isAudioMuted ? '🔇' : '🎙️';
+                document.getElementById('btnMuteAudio').classList.toggle('off', isAudioMuted);
+            }
+        }
+
+        function toggleVideo() {
+            if(localStream && localStream.getVideoTracks().length > 0) {
+                isVideoOff = !isVideoOff;
+                localStream.getVideoTracks()[0].enabled = !isVideoOff;
+                document.getElementById('btnMuteVideo').innerText = isVideoOff ? '🚫' : '📷';
+                document.getElementById('btnMuteVideo').classList.toggle('off', isVideoOff);
+            }
+        }
+
+        // --- WebRTC Logic ---
         async function startCall(type) {
             document.getElementById('callOverlay').classList.remove('hidden');
-            document.getElementById('callTargetName').innerText = activeChat.name;
-            document.getElementById('callStatus').innerText = "Connecting...";
+            document.getElementById('callTargetName').innerText = activeChat.name || activeChat.phone;
+            document.getElementById('callStatus').innerText = "Calling...";
             if (type === 'video') document.getElementById('videoContainer').classList.remove('hidden');
             
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ video: type === 'video', audio: true });
                 document.getElementById('localVideo').srcObject = localStream;
-                
                 peerConn = new RTCPeerConnection(rtcConfig);
                 localStream.getTracks().forEach(track => peerConn.addTrack(track, localStream));
                 
@@ -292,17 +331,14 @@ html_content = """
                 };
                 peerConn.ontrack = e => {
                     document.getElementById('remoteVideo').srcObject = e.streams[0];
-                    document.getElementById('callStatus').innerText = "Ongoing Call";
+                    document.getElementById('callStatus').innerText = "In Call";
                 };
                 
                 const offer = await peerConn.createOffer();
                 await peerConn.setLocalDescription(offer);
                 socket.emit('call_signal', { to: activeChat.phone, from: myData.phone, offer, type, name: myData.name });
                 socket.emit('log_call', { from: myData.phone, to: activeChat.phone, type: type });
-            } catch (err) {
-                alert("ক্যামেরা বা মাইক্রোফোন এক্সেস পাওয়া যায়নি!");
-                endCall(false);
-            }
+            } catch (err) { alert("Permission Error!"); endCall(false); }
         }
 
         let incomingSignal = null;
@@ -310,8 +346,8 @@ html_content = """
             if (data.offer) {
                 incomingSignal = data;
                 document.getElementById('callOverlay').classList.remove('hidden');
-                document.getElementById('callTargetName').innerText = data.name;
-                document.getElementById('btnAccept').classList.remove('hidden');
+                document.getElementById('callTargetName').innerText = data.name || data.from;
+                document.getElementById('btnAccept').style.display = 'flex';
                 document.getElementById('ringtone').play();
             } else if (data.answer && peerConn) {
                 await peerConn.setRemoteDescription(new RTCSessionDescription(data.answer));
@@ -322,13 +358,12 @@ html_content = """
 
         async function acceptCall() {
             document.getElementById('ringtone').pause();
-            document.getElementById('btnAccept').classList.add('hidden');
+            document.getElementById('btnAccept').style.display = 'none';
             if (incomingSignal.type === 'video') document.getElementById('videoContainer').classList.remove('hidden');
             
             try {
                 localStream = await navigator.mediaDevices.getUserMedia({ video: incomingSignal.type === 'video', audio: true });
                 document.getElementById('localVideo').srcObject = localStream;
-                
                 peerConn = new RTCPeerConnection(rtcConfig);
                 localStream.getTracks().forEach(track => peerConn.addTrack(track, localStream));
                 
@@ -337,94 +372,105 @@ html_content = """
                 };
                 peerConn.ontrack = e => {
                     document.getElementById('remoteVideo').srcObject = e.streams[0];
-                    document.getElementById('callStatus').innerText = "Ongoing Call";
+                    document.getElementById('callStatus').innerText = "In Call";
                 };
                 
                 await peerConn.setRemoteDescription(new RTCSessionDescription(incomingSignal.offer));
                 const answer = await peerConn.createAnswer();
                 await peerConn.setLocalDescription(answer);
                 socket.emit('call_signal', { to: incomingSignal.from, from: myData.phone, answer });
-            } catch (err) {
-                alert("Error connecting call.");
-                endCall(true);
-            }
+            } catch (err) { endCall(true); }
         }
 
         function endCall(sendSignal) {
-            if (sendSignal && (activeChat || incomingSignal)) {
-                const target = activeChat ? activeChat.phone : incomingSignal.from;
-                socket.emit('end_call_signal', { to: target });
+            if (sendSignal) {
+                const target = activeChat ? activeChat.phone : (incomingSignal ? incomingSignal.from : null);
+                if(target) socket.emit('end_call_signal', { to: target });
             }
-            
-            if (localStream) localStream.getTracks().forEach(track => track.stop());
+            if (localStream) localStream.getTracks().forEach(t => t.stop());
             if (peerConn) peerConn.close();
-            peerConn = null;
-            localStream = null;
-            incomingSignal = null;
-            
+            peerConn = null; localStream = null; incomingSignal = null;
             document.getElementById('callOverlay').classList.add('hidden');
             document.getElementById('videoContainer').classList.add('hidden');
             document.getElementById('ringtone').pause();
+            document.getElementById('btnMuteAudio').innerText = '🎙️';
+            document.getElementById('btnMuteVideo').innerText = '📷';
         }
 
-        socket.on('end_call_received', () => {
-            endCall(false);
-        });
+        socket.on('end_call_received', () => endCall(false));
 
-        // --- অন্যান্য ইভেন্ট ---
-        socket.on('new_msg', d => {
-            if (activeChat && activeChat.phone === d.from) appendMessage(d, 'recv');
-            else socket.emit('get_chat_list', { phone: myData.phone });
-        });
-
-        socket.on('load_msgs', msgs => msgs.forEach(m => appendMessage(m, m.from === myData.phone ? 'sent' : 'recv')));
-
-        function auth() {
-            const phone = document.getElementById('authPhone').value.trim();
-            const pin = document.getElementById('authPin').value.trim();
-            socket.emit('auth_request', { phone, pin });
-        }
-        function sendText() {
-            const text = document.getElementById('msgInput').value.trim();
-            if (!text) return;
-            const msgData = { from: myData.phone, to: activeChat.phone, message: text, type: 'text' };
-            socket.emit('send_msg', msgData);
-            document.getElementById('msgInput').value = "";
-        }
-        function sendImage(e) {
-            const reader = new FileReader();
-            reader.onload = (ev) => {
-                const msgData = { from: myData.phone, to: activeChat.phone, message: ev.target.result, type: 'image' };
-                socket.emit('send_msg', msgData);
-            };
-            reader.readAsDataURL(e.target.files[0]);
-        }
-        async function startVoice() {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-            mediaRecorder = new MediaRecorder(stream);
-            mediaRecorder.start(); voiceChunks = [];
-            document.getElementById('voiceBtn').classList.add('recording');
-            mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
-            mediaRecorder.onstop = () => {
-                const blob = new Blob(voiceChunks, { type: 'audio/ogg; codecs=opus' });
-                const reader = new FileReader();
-                reader.onload = (e) => {
-                    const msgData = { from: myData.phone, to: activeChat.phone, message: e.target.result, type: 'voice' };
-                    socket.emit('send_msg', msgData);
-                };
-                reader.readAsDataURL(blob);
-            };
-        }
-        function stopVoice() { if(mediaRecorder) { mediaRecorder.stop(); document.getElementById('voiceBtn').classList.remove('recording'); } }
-        function logout() { localStorage.clear(); location.reload(); }
+        // --- Chat Helpers ---
         function switchTab(tab, el) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             el.classList.add('active');
             document.getElementById('chatsTab').classList.toggle('hidden', tab !== 'chats');
             document.getElementById('contactsTab').classList.toggle('hidden', tab !== 'contacts');
             document.getElementById('callsTab').classList.toggle('hidden', tab !== 'calls');
+            if(tab === 'calls') socket.emit('get_call_history', { phone: myData.phone });
         }
-        socket.on('contacts_data', u => { /* Rendering logic remains same as per your master code */ 
+
+        function sendText() {
+            const t = document.getElementById('msgInput').value.trim();
+            if(!t) return;
+            socket.emit('send_msg', { from: myData.phone, to: activeChat.phone, message: t, type: 'text' });
+            document.getElementById('msgInput').value = "";
+        }
+
+        async function startVoice() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.start(); voiceChunks = [];
+                document.getElementById('voiceBtn').classList.add('recording');
+                mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(voiceChunks, { type: 'audio/ogg; codecs=opus' });
+                    const reader = new FileReader();
+                    reader.onload = (e) => socket.emit('send_msg', { from: myData.phone, to: activeChat.phone, message: e.target.result, type: 'voice' });
+                    reader.readAsDataURL(blob);
+                };
+            } catch(e) { alert("Mic error"); }
+        }
+        function stopVoice() { if(mediaRecorder && mediaRecorder.state !== 'inactive') { mediaRecorder.stop(); document.getElementById('voiceBtn').classList.remove('recording'); } }
+
+        function sendImage(e) {
+            const reader = new FileReader();
+            reader.onload = (ev) => socket.emit('send_msg', { from: myData.phone, to: activeChat.phone, message: ev.target.result, type: 'image' });
+            reader.readAsDataURL(e.target.files[0]);
+        }
+
+        socket.on('new_msg', d => {
+            if (activeChat && (activeChat.phone === d.from || myData.phone === d.from)) appendMessage(d, d.from === myData.phone ? 'sent' : 'recv');
+            else socket.emit('get_chat_list', { phone: myData.phone });
+        });
+
+        socket.on('load_msgs', msgs => msgs.forEach(m => appendMessage(m, m.from === myData.phone ? 'sent' : 'recv')));
+
+        function saveProfile() {
+            const name = document.getElementById('setupName').value.trim();
+            const avatar = document.getElementById('avatarPreview').querySelector('img')?.src || "";
+            if(name) socket.emit('update_profile', { phone: myData.phone, name, avatar });
+        }
+        function previewAvatar(e) {
+            const reader = new FileReader();
+            reader.onload = (ev) => document.getElementById('avatarPreview').innerHTML = `<img src="${ev.target.result}" style="width:100%;height:100%;border-radius:50%;">`;
+            reader.readAsDataURL(e.target.files[0]);
+        }
+        function addFriend() {
+            const p = document.getElementById('searchUser').value.trim();
+            if(p) socket.emit('add_friend', { myPhone: myData.phone, friendPhone: p });
+        }
+        function logout() { localStorage.clear(); location.reload(); }
+        function handleTyping() { socket.emit('typing', { from: myData.phone, to: activeChat.phone }); }
+        socket.on('user_typing', d => {
+            if (activeChat && activeChat.phone === d.from) {
+                document.getElementById('typingStatus').innerText = "typing...";
+                clearTimeout(typingTimeout);
+                typingTimeout = setTimeout(() => document.getElementById('typingStatus').innerText = "", 2000);
+            }
+        });
+
+        socket.on('contacts_data', u => {
             let list = document.getElementById('contactList'); list.innerHTML = "";
             u.forEach(user => {
                 list.innerHTML += `<div class="item" onclick="openChat('${user.phone}', '${user.name}', '${user.avatar}')">
@@ -433,6 +479,7 @@ html_content = """
                 </div>`;
             });
         });
+
         socket.on('chat_list_data', c => {
             let list = document.getElementById('chatsTab'); list.innerHTML = "";
             c.forEach(chat => {
@@ -442,6 +489,16 @@ html_content = """
                 </div>`;
             });
         });
+
+        socket.on('call_history_data', calls => {
+            const list = document.getElementById('callsTab'); list.innerHTML = "";
+            calls.forEach(c => {
+                const incoming = c.to === myData.phone;
+                list.innerHTML += `<div class="item"><div class="avatar">📞</div><div class="item-info"><b>${incoming ? c.from : c.to}</b><span>${incoming ? 'Incoming' : 'Outgoing'} • ${c.type} • ${c.time}</span></div></div>`;
+            });
+        });
+        socket.on('add_friend_res', res => alert(res.message));
+        socket.on('profile_updated', user => { myData = user; document.getElementById('profileScreen').classList.add('hidden'); showDashboard(); });
     </script>
 </body>
 </html>
@@ -462,7 +519,7 @@ def handle_auth(data):
             users_col.update_one({"phone": phone}, {"$set": {"status": "online", "sid": request.sid}})
             user['_id'] = str(user['_id'])
             emit('auth_response', {"status": "success", "user": user})
-        else: emit('auth_response', {"status": "error", "message": "ভুল পিন!"})
+        else: emit('auth_response', {"status": "error", "message": "Wrong PIN!"})
     else:
         new_user = {"phone": phone, "pin": pin, "name": "", "avatar": "", "status": "online", "sid": request.sid, "contacts": []}
         users_col.insert_one(new_user)
@@ -476,17 +533,28 @@ def auto_login(data):
         user['_id'] = str(user['_id'])
         emit('auth_response', {"status": "success", "user": user})
 
+@socketio.on('get_user_profile')
+def get_user_profile(data):
+    user = users_col.find_one({"phone": data['phone']}, {"pin": 0, "sid": 0, "contacts": 0})
+    if user:
+        user['_id'] = str(user['_id'])
+        emit('user_profile_data', user)
+
 @socketio.on('send_msg')
 def handle_msg(data):
     msg_obj = {**data, "timestamp": datetime.datetime.now()}
     result = chats_col.insert_one(msg_obj)
     data['_id'] = str(result.inserted_id)
-    # সেন্ডারকে কনফার্মেশন পাঠানো (যাতে নিজের স্ক্রিনে মেসেজ থাকে)
-    emit('new_msg', data, room=request.sid)
-    # রিসিভারকে পাঠানো
+    emit('new_msg', data, room=request.sid) # সেন্ডারকে পাঠানো
     target = users_col.find_one({"phone": data['to']})
     if target and target['status'] == 'online':
-        emit('new_msg', data, room=target['sid'])
+        emit('new_msg', data, room=target['sid']) # রিসিভারকে পাঠানো
+
+@socketio.on('delete_msg')
+def delete_msg(data):
+    msg_id = data.get('msgId')
+    try: chats_col.delete_one({"_id": ObjectId(msg_id)})
+    except: chats_col.delete_one({"_id": msg_id})
 
 @socketio.on('end_call_signal')
 def end_call_signal(data):
@@ -499,11 +567,10 @@ def call_signal(data):
     target = users_col.find_one({"phone": data['to']})
     if target: emit('call_signal', data, room=target['sid'])
 
-@socketio.on('get_messages')
-def get_msgs(data):
-    msgs = list(chats_col.find({"$or": [{"from": data['from'], "to": data['to']}, {"from": data['to'], "to": data['from']}]}).sort("timestamp", 1))
-    for m in msgs: m['_id'] = str(m['_id'])
-    emit('load_msgs', msgs)
+@socketio.on('log_call')
+def log_call(data):
+    call_log = {"from": data['from'], "to": data['to'], "type": data['type'], "time": datetime.datetime.now().strftime("%d %b, %H:%M")}
+    calls_col.insert_one(call_log)
 
 @socketio.on('get_chat_list')
 def get_chat_list(data):
@@ -515,16 +582,11 @@ def get_chat_list(data):
         if u: chat_list.append({"phone": u['phone'], "name": u['name'] or u['phone'], "avatar": u['avatar'], "lastMsg": res['lastMsg'][:20]})
     emit('chat_list_data', chat_list)
 
-@socketio.on('delete_msg')
-def delete_msg(data):
-    msg_id = data.get('msgId')
-    try: chats_col.delete_one({"_id": ObjectId(msg_id)})
-    except: chats_col.delete_one({"_id": msg_id})
-
-@socketio.on('log_call')
-def log_call(data):
-    call_log = {"from": data['from'], "to": data['to'], "type": data['type'], "time": datetime.datetime.now().strftime("%d %b, %H:%M")}
-    calls_col.insert_one(call_log)
+@socketio.on('get_messages')
+def get_msgs(data):
+    msgs = list(chats_col.find({"$or": [{"from": data['from'], "to": data['to']}, {"from": data['to'], "to": data['from']}]}).sort("timestamp", 1))
+    for m in msgs: m['_id'] = str(m['_id'])
+    emit('load_msgs', msgs)
 
 @socketio.on('get_call_history')
 def get_calls(data):
@@ -546,7 +608,20 @@ def add_friend(data):
     if target:
         users_col.update_one({"phone": me}, {"$addToSet": {"contacts": friend}})
         users_col.update_one({"phone": friend}, {"$addToSet": {"contacts": me}})
-        emit('add_friend_res', {"status": "success", "message": "বন্ধু যুক্ত হয়েছে!"})
+        emit('add_friend_res', {"status": "success", "message": "Friend Added!"})
+    else: emit('add_friend_res', {"status": "error", "message": "User not found!"})
+
+@socketio.on('update_profile')
+def update_profile(data):
+    users_col.update_one({"phone": data['phone']}, {"$set": {"name": data['name'], "avatar": data['avatar']}})
+    user = users_col.find_one({"phone": data['phone']})
+    user['_id'] = str(user['_id'])
+    emit('profile_updated', user)
+
+@socketio.on('typing')
+def typing(data):
+    target = users_col.find_one({"phone": data['to']})
+    if target: emit('user_typing', {"from": data['from']}, room=target['sid'])
 
 @socketio.on('disconnect')
 def on_disconnect():
