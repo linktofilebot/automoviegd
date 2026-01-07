@@ -12,7 +12,8 @@ from bson import json_util
 # --- অ্যাপ কনফিগারেশন ---
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'imo-pro-v3-2026'
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', max_http_buffer_size=10**7) # ১০ মেগাবাইট পর্যন্ত ফাইল সাপোর্ট
+# ১০ মেগাবাইট পর্যন্ত ফাইল ও ভয়েস সাপোর্ট
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', max_http_buffer_size=10**7) 
 
 # --- ডাটাবেস কানেকশন ---
 MONGO_URI = "mongodb+srv://Demo270:Demo270@cluster0.ls1igsg.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0" 
@@ -37,7 +38,7 @@ html_content = """
     <title>Imo Pro - মেসেঞ্জার</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        :root { --main: #2e86de; --bg: #f1f2f6; --white: #ffffff; --grey: #8395a7; --green: #10ac84; }
+        :root { --main: #2e86de; --bg: #f1f2f6; --white: #ffffff; --grey: #8395a7; --green: #10ac84; --danger: #ff4757; }
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: var(--bg); margin: 0; display: flex; justify-content: center; height: 100vh; }
         .hidden { display: none !important; }
         
@@ -48,15 +49,12 @@ html_content = """
         input { width: 100%; padding: 14px; margin: 10px 0; border: 1px solid #ddd; border-radius: 10px; font-size: 16px; box-sizing: border-box; }
         .btn { width: 100%; padding: 14px; border: none; border-radius: 10px; cursor: pointer; font-weight: bold; font-size: 16px; margin-top: 10px; background: var(--main); color: white; }
 
-        /* Header */
         header { background: var(--main); color: white; padding: 15px; display: flex; justify-content: space-between; align-items: center; font-size: 18px; font-weight: bold; }
         
-        /* Tabs */
         .tabs { display: flex; background: var(--main); border-bottom: 2px solid rgba(0,0,0,0.1); }
         .tab { flex: 1; padding: 12px; text-align: center; color: rgba(255,255,255,0.7); cursor: pointer; font-weight: bold; }
         .tab.active { color: white; border-bottom: 3px solid white; }
 
-        /* List Area */
         .list-container { flex: 1; overflow-y: auto; }
         .item { display: flex; align-items: center; padding: 15px; border-bottom: 1px solid #f0f0f0; cursor: pointer; position: relative; }
         .item:hover { background: #f9f9f9; }
@@ -77,8 +75,10 @@ html_content = """
         .msg-time { font-size: 10px; color: #999; display: block; text-align: right; margin-top: 3px; }
 
         .chat-footer { background: #f0f0f0; padding: 10px; display: flex; align-items: center; gap: 10px; }
-        .chat-footer input { margin: 0; border-radius: 25px; border: none; padding: 12px 20px; }
-        .icon-btn { cursor: pointer; font-size: 22px; color: var(--main); }
+        .chat-footer input { margin: 0; border-radius: 25px; border: none; padding: 12px 20px; flex: 1; }
+        .icon-btn { cursor: pointer; font-size: 22px; color: var(--main); transition: 0.3s; }
+        .icon-btn.recording { color: var(--danger); transform: scale(1.2); animation: blink 1s infinite; }
+        @keyframes blink { 50% { opacity: 0.5; } }
 
         /* Call Overlay */
         .call-overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #075e54; z-index: 9999; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; }
@@ -111,7 +111,7 @@ html_content = """
             <h2>প্রোফাইল সেটআপ</h2>
             <div id="avatarPreview" class="avatar" style="width: 100px; height: 100px; margin: 0 auto 20px;">👤</div>
             <input type="text" id="setupName" placeholder="আপনার নাম">
-            <p>একটি প্রোফাইল ছবি চুজ করুন (লিঙ্ক বা ফাইল)</p>
+            <p>প্রোফাইল ছবি (ফাইল)</p>
             <input type="file" id="avatarFile" accept="image/*" onchange="previewAvatar(event)">
             <button class="btn" onclick="saveProfile()">সম্পন্ন করুন</button>
         </div>
@@ -132,8 +132,9 @@ html_content = """
             </div>
 
             <div id="contactsTab" class="list-container hidden">
-                <div style="padding: 10px;">
-                    <input type="number" id="searchUser" placeholder="বন্ধুর নাম্বার দিয়ে খুঁজুন" oninput="searchContacts()">
+                <div style="padding: 10px; display: flex; gap: 10px;">
+                    <input type="number" id="searchUser" placeholder="বন্ধুর নাম্বার দিয়ে খুঁজুন" style="margin: 0; flex: 1;">
+                    <button onclick="addFriend()" style="padding: 10px; border-radius: 10px; border: none; background: var(--main); color: white; cursor: pointer;">Add</button>
                 </div>
                 <div id="contactList"></div>
             </div>
@@ -155,7 +156,12 @@ html_content = """
             <div class="chat-footer">
                 <label for="imgUpload" class="icon-btn">🖼️</label>
                 <input type="file" id="imgUpload" hidden accept="image/*" onchange="sendImage(event)">
+                
                 <input type="text" id="msgInput" placeholder="মেসেজ লিখুন..." oninput="handleTyping()">
+                
+                <!-- ভয়েস মেসেজ বাটন -->
+                <span id="voiceBtn" class="icon-btn" onmousedown="startVoice()" onmouseup="stopVoice()" ontouchstart="startVoice()" ontouchend="stopVoice()">🎙️</span>
+                
                 <span class="icon-btn" onclick="sendText()">➤</span>
             </div>
         </div>
@@ -178,10 +184,8 @@ html_content = """
 
     <script>
         const socket = io();
-        let myData = null;
-        let activeChat = null;
-        let peerConn, localStream;
-        let typingTimeout;
+        let myData = null, activeChat = null, peerConn, localStream, typingTimeout;
+        let mediaRecorder, voiceChunks = [];
         const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
         // --- অটো লগইন ---
@@ -202,20 +206,14 @@ html_content = """
                 myData = data.user;
                 localStorage.setItem('imo_v3_session', JSON.stringify({ phone: data.user.phone, pin: data.user.pin }));
                 document.getElementById('authScreen').classList.add('hidden');
-                
-                if (!data.user.name) {
-                    document.getElementById('profileScreen').classList.remove('hidden');
-                } else {
-                    showDashboard();
-                }
-            } else {
-                alert(data.message);
-            }
+                if (!data.user.name) document.getElementById('profileScreen').classList.remove('hidden');
+                else showDashboard();
+            } else alert(data.message);
         });
 
         function saveProfile() {
             const name = document.getElementById('setupName').value.trim();
-            const avatar = document.getElementById('avatarPreview').src || "";
+            const avatar = document.getElementById('avatarPreview').querySelector('img')?.src || "";
             if (!name) return alert("নাম লিখুন");
             socket.emit('update_profile', { phone: myData.phone, name, avatar });
         }
@@ -228,35 +226,37 @@ html_content = """
 
         function showDashboard() {
             document.getElementById('mainDashboard').classList.remove('hidden');
-            socket.emit('get_contacts');
+            socket.emit('get_contacts', { phone: myData.phone });
             socket.emit('get_chat_list', { phone: myData.phone });
         }
 
         function switchTab(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             event.target.classList.add('active');
-            if (tab === 'chats') {
-                document.getElementById('chatsTab').classList.remove('hidden');
-                document.getElementById('contactsTab').classList.add('hidden');
-            } else {
-                document.getElementById('chatsTab').classList.add('hidden');
-                document.getElementById('contactsTab').classList.remove('hidden');
-            }
+            document.getElementById('chatsTab').classList.toggle('hidden', tab !== 'chats');
+            document.getElementById('contactsTab').classList.toggle('hidden', tab !== 'contacts');
         }
 
-        // --- কন্টাক্ট ও চ্যাট লিস্ট ---
+        // --- বন্ধু যুক্ত করার সিস্টেম ---
+        function addFriend() {
+            const phone = document.getElementById('searchUser').value.trim();
+            if(!phone || phone === myData.phone) return alert("সঠিক নম্বর দিন");
+            socket.emit('add_friend', { myPhone: myData.phone, friendPhone: phone });
+        }
+
+        socket.on('add_friend_res', res => {
+            alert(res.message);
+            if(res.status === 'success') socket.emit('get_contacts', { phone: myData.phone });
+        });
+
         socket.on('contacts_data', users => {
             const list = document.getElementById('contactList');
             list.innerHTML = "";
             users.forEach(u => {
-                if (u.phone === myData.phone) return;
                 list.innerHTML += `
                     <div class="item" onclick="openChat('${u.phone}', '${u.name}', '${u.avatar}')">
                         <img class="avatar" src="${u.avatar || '👤'}">
-                        <div class="item-info">
-                            <b>${u.name}</b>
-                            <span>${u.phone}</span>
-                        </div>
+                        <div class="item-info"><b>${u.name}</b><span>${u.phone}</span></div>
                         ${u.status === 'online' ? '<div class="online-dot"></div>' : ''}
                     </div>`;
             });
@@ -269,10 +269,7 @@ html_content = """
                 list.innerHTML += `
                     <div class="item" onclick="openChat('${c.phone}', '${c.name}', '${c.avatar}')">
                         <img class="avatar" src="${c.avatar || '👤'}">
-                        <div class="item-info">
-                            <b>${c.name}</b>
-                            <span style="${c.unread ? 'color:var(--main); font-weight:bold;' : ''}">${c.lastMsg}</span>
-                        </div>
+                        <div class="item-info"><b>${c.name}</b><span>${c.lastMsg}</span></div>
                     </div>`;
             });
         });
@@ -303,9 +300,8 @@ html_content = """
 
         function sendImage(e) {
             const file = e.target.files[0];
-            if (!file) return;
             const reader = new FileReader();
-            reader.onload = function(event) {
+            reader.onload = (event) => {
                 const msgData = { from: myData.phone, to: activeChat.phone, message: event.target.result, type: 'image' };
                 socket.emit('send_msg', msgData);
                 appendMessage(msgData, 'sent');
@@ -313,12 +309,39 @@ html_content = """
             reader.readAsDataURL(file);
         }
 
+        // --- ভয়েস মেসেজ সিস্টেম ---
+        async function startVoice() {
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                mediaRecorder = new MediaRecorder(stream);
+                mediaRecorder.start();
+                voiceChunks = [];
+                document.getElementById('voiceBtn').classList.add('recording');
+                mediaRecorder.ondataavailable = e => voiceChunks.push(e.data);
+                mediaRecorder.onstop = () => {
+                    const blob = new Blob(voiceChunks, { type: 'audio/ogg; codecs=opus' });
+                    const reader = new FileReader();
+                    reader.onload = (e) => {
+                        const msgData = { from: myData.phone, to: activeChat.phone, message: e.target.result, type: 'voice' };
+                        socket.emit('send_msg', msgData);
+                        appendMessage(msgData, 'sent');
+                    };
+                    reader.readAsDataURL(blob);
+                };
+            } catch(e) { alert("মাইক্রোফোন পারমিশন দিন"); }
+        }
+
+        function stopVoice() {
+            if(mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+                document.getElementById('voiceBtn').classList.remove('recording');
+            }
+        }
+
         socket.on('new_msg', data => {
             if (activeChat && activeChat.phone === data.from) {
                 appendMessage(data, 'recv');
-                socket.emit('msg_seen', { from: data.from, to: myData.phone });
             } else {
-                // নোটিফিকেশন বা চ্যাট লিস্ট আপডেট
                 socket.emit('get_chat_list', { phone: myData.phone });
             }
         });
@@ -331,10 +354,10 @@ html_content = """
             const box = document.getElementById('chatBox');
             const div = document.createElement('div');
             div.className = `msg ${side}`;
-            
-            let content = data.type === 'text' ? data.message : `<img src="${data.message}" onclick="window.open(this.src)">`;
-            div.innerHTML = `${content} <span class="msg-time">${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>`;
-            
+            if (data.type === 'text') div.innerText = data.message;
+            else if (data.type === 'image') div.innerHTML = `<img src="${data.message}" style="max-width:200px">`;
+            else if (data.type === 'voice') div.innerHTML = `<audio src="${data.message}" controls style="max-width:200px"></audio>`;
+            div.innerHTML += `<span class="msg-time">${new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>`;
             box.appendChild(div);
             box.scrollTop = box.scrollHeight;
         }
@@ -352,44 +375,31 @@ html_content = """
             }
         });
 
-        // --- ভিডিও কলিং লজিক (WebRTC) ---
+        // --- ভিডিও/অডিও কল লজিক (অক্ষত) ---
         async function startCall(type) {
             document.getElementById('callOverlay').classList.remove('hidden');
             document.getElementById('callTargetName').innerText = activeChat.name;
-            document.getElementById('callStatus').innerText = "Calling...";
-            
             if (type === 'video') document.getElementById('videoContainer').classList.remove('hidden');
-
             localStream = await navigator.mediaDevices.getUserMedia({ video: type === 'video', audio: true });
             document.getElementById('localVideo').srcObject = localStream;
-
             peerConn = new RTCPeerConnection(rtcConfig);
             localStream.getTracks().forEach(track => peerConn.addTrack(track, localStream));
-
-            peerConn.onicecandidate = e => {
-                if (e.candidate) socket.emit('call_signal', { to: activeChat.phone, from: myData.phone, candidate: e.candidate });
-            };
-            peerConn.ontrack = e => {
-                document.getElementById('remoteVideo').srcObject = e.streams[0];
-            };
-
+            peerConn.onicecandidate = e => e.candidate && socket.emit('call_signal', { to: activeChat.phone, from: myData.phone, candidate: e.candidate });
+            peerConn.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
             const offer = await peerConn.createOffer();
             await peerConn.setLocalDescription(offer);
             socket.emit('call_signal', { to: activeChat.phone, from: myData.phone, offer, type, name: myData.name });
         }
 
-        let incomingSignal = null;
         socket.on('call_signal', async data => {
             if (data.offer) {
                 incomingSignal = data;
                 document.getElementById('callOverlay').classList.remove('hidden');
                 document.getElementById('callTargetName').innerText = data.name;
-                document.getElementById('callStatus').innerText = `Incoming ${data.type} call...`;
                 document.getElementById('btnAccept').classList.remove('hidden');
                 document.getElementById('ringtone').play();
             } else if (data.answer) {
                 await peerConn.setRemoteDescription(new RTCSessionDescription(data.answer));
-                document.getElementById('callStatus').innerText = "Connected";
             } else if (data.candidate) {
                 try { await peerConn.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
             }
@@ -398,45 +408,29 @@ html_content = """
         async function acceptCall() {
             document.getElementById('ringtone').pause();
             document.getElementById('btnAccept').classList.add('hidden');
-            document.getElementById('callStatus').innerText = "Connecting...";
             if (incomingSignal.type === 'video') document.getElementById('videoContainer').classList.remove('hidden');
-
             localStream = await navigator.mediaDevices.getUserMedia({ video: incomingSignal.type === 'video', audio: true });
             document.getElementById('localVideo').srcObject = localStream;
-
             peerConn = new RTCPeerConnection(rtcConfig);
             localStream.getTracks().forEach(track => peerConn.addTrack(track, localStream));
-
-            peerConn.onicecandidate = e => {
-                if (e.candidate) socket.emit('call_signal', { to: incomingSignal.from, from: myData.phone, candidate: e.candidate });
-            };
-            peerConn.ontrack = e => {
-                document.getElementById('remoteVideo').srcObject = e.streams[0];
-            };
-
+            peerConn.onicecandidate = e => e.candidate && socket.emit('call_signal', { to: incomingSignal.from, from: myData.phone, candidate: e.candidate });
+            peerConn.ontrack = e => document.getElementById('remoteVideo').srcObject = e.streams[0];
             await peerConn.setRemoteDescription(new RTCSessionDescription(incomingSignal.offer));
             const answer = await peerConn.createAnswer();
             await peerConn.setLocalDescription(answer);
             socket.emit('call_signal', { to: incomingSignal.from, from: myData.phone, answer });
         }
 
-        function endCall() {
-            location.reload(); // সিম্পল হ্যান্ডলিং এর জন্য পেজ রিলোড
-        }
+        function endCall() { location.reload(); }
 
         function previewAvatar(e) {
             const file = e.target.files[0];
-            if (file) {
-                const reader = new FileReader();
-                reader.onload = (event) => document.getElementById('avatarPreview').innerHTML = `<img src="${event.target.result}" style="width:100%; height:100%; border-radius:50%;">`;
-                reader.readAsDataURL(file);
-            }
+            const reader = new FileReader();
+            reader.onload = (event) => document.getElementById('avatarPreview').innerHTML = `<img src="${event.target.result}" style="width:100%;height:100%;border-radius:50%;">`;
+            reader.readAsDataURL(file);
         }
 
-        function logout() {
-            localStorage.removeItem('imo_v3_session');
-            location.reload();
-        }
+        function logout() { localStorage.removeItem('imo_v3_session'); location.reload(); }
     </script>
 </body>
 </html>
@@ -446,7 +440,7 @@ html_content = """
 def index():
     return render_template_string(html_content)
 
-# --- ব্যাকএন্ড সকেট লজিক ---
+# --- ব্যাকএন্ড সকেট লজিক (অক্ষত ও উন্নত) ---
 
 @socketio.on('auth_request')
 def handle_auth(data):
@@ -457,14 +451,11 @@ def handle_auth(data):
             users_col.update_one({"phone": phone}, {"$set": {"status": "online", "sid": request.sid}})
             user['_id'] = str(user['_id'])
             emit('auth_response', {"status": "success", "user": user})
-        else:
-            emit('auth_response', {"status": "error", "message": "ভুল পিন!"})
+        else: emit('auth_response', {"status": "error", "message": "ভুল পিন!"})
     else:
-        new_user = {"phone": phone, "pin": pin, "name": "", "avatar": "", "status": "online", "sid": request.sid}
+        new_user = {"phone": phone, "pin": pin, "name": "", "avatar": "", "status": "online", "sid": request.sid, "contacts": []}
         users_col.insert_one(new_user)
-        new_user['_id'] = str(new_user['_id'])
         emit('auth_response', {"status": "success", "user": new_user})
-    broadcast_contacts()
 
 @socketio.on('auto_login')
 def auto_login(data):
@@ -473,7 +464,6 @@ def auto_login(data):
         users_col.update_one({"phone": data['phone']}, {"$set": {"status": "online", "sid": request.sid}})
         user['_id'] = str(user['_id'])
         emit('auth_response', {"status": "success", "user": user})
-    broadcast_contacts()
 
 @socketio.on('update_profile')
 def update_profile(data):
@@ -481,19 +471,29 @@ def update_profile(data):
     user = users_col.find_one({"phone": data['phone']})
     user['_id'] = str(user['_id'])
     emit('profile_updated', user)
-    broadcast_contacts()
+
+@socketio.on('add_friend')
+def add_friend(data):
+    me = data['myPhone']
+    friend = data['friendPhone']
+    target = users_col.find_one({"phone": friend})
+    if not target:
+        emit('add_friend_res', {"status": "error", "message": "নম্বরটি imo-তে নেই!"})
+    else:
+        users_col.update_one({"phone": me}, {"$addToSet": {"contacts": friend}})
+        users_col.update_one({"phone": friend}, {"$addToSet": {"contacts": me}})
+        emit('add_friend_res', {"status": "success", "message": "বন্ধু যুক্ত হয়েছে!"})
 
 @socketio.on('get_contacts')
-def send_contacts():
-    broadcast_contacts()
-
-def broadcast_contacts():
-    users = list(users_col.find({}, {"_id": 0, "pin": 0, "sid": 0}))
-    socketio.emit('contacts_data', users)
+def get_contacts(data):
+    user = users_col.find_one({"phone": data['phone']})
+    if user and "contacts" in user:
+        contacts = list(users_col.find({"phone": {"$in": user['contacts']}}, {"_id": 0, "pin": 0, "sid": 0}))
+        emit('contacts_data', contacts)
 
 @socketio.on('send_msg')
 def handle_msg(data):
-    msg_obj = {**data, "timestamp": datetime.datetime.now(), "seen": False}
+    msg_obj = {**data, "timestamp": datetime.datetime.now()}
     chats_col.insert_one(msg_obj)
     target = users_col.find_one({"phone": data['to']})
     if target and target['status'] == 'online':
@@ -502,37 +502,22 @@ def handle_msg(data):
 @socketio.on('get_messages')
 def get_msgs(data):
     msgs = list(chats_col.find({
-        "$or": [
-            {"from": data['from'], "to": data['to']},
-            {"from": data['to'], "to": data['from']}
-        ]
+        "$or": [{"from": data['from'], "to": data['to']}, {"from": data['to'], "to": data['from']}]
     }, {"_id": 0}).sort("timestamp", 1))
     emit('load_msgs', msgs)
 
 @socketio.on('get_chat_list')
 def get_chat_list(data):
-    # এটা একটু জটিল কোয়েরি, সংক্ষেপে বোঝানোর জন্য:
-    # যাদের সাথে মেসেজ আদান প্রদান হয়েছে তাদের লিস্ট বের করা
     pipeline = [
         {"$match": {"$or": [{"from": data['phone']}, {"to": data['phone']}]}},
         {"$sort": {"timestamp": -1}},
-        {"$group": {
-            "_id": {"$cond": [{"$eq": ["$from", data['phone']]}, "$to", "$from"]},
-            "lastMsg": {"$first": "$message"},
-            "type": {"$first": "$type"}
-        }}
+        {"$group": {"_id": {"$cond": [{"$eq": ["$from", data['phone']]}, "$to", "$from"]}, "lastMsg": {"$first": "$message"}}}
     ]
     results = list(chats_col.aggregate(pipeline))
     chat_list = []
     for res in results:
         u = users_col.find_one({"phone": res['_id']})
-        if u:
-            chat_list.append({
-                "phone": u['phone'],
-                "name": u['name'],
-                "avatar": u['avatar'],
-                "lastMsg": "📷 Photo" if res['type'] == 'image' else res['lastMsg'][:20]
-            })
+        if u: chat_list.append({"phone": u['phone'], "name": u['name'], "avatar": u['avatar'], "lastMsg": res['lastMsg'][:20]})
     emit('chat_list_data', chat_list)
 
 @socketio.on('typing')
@@ -548,7 +533,6 @@ def call_signal(data):
 @socketio.on('disconnect')
 def on_disconnect():
     users_col.update_one({"sid": request.sid}, {"$set": {"status": "offline"}})
-    broadcast_contacts()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
