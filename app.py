@@ -1,294 +1,393 @@
-# ১. সবার আগে eventlet monkey patch (অবশ্যই সবার উপরে থাকবে)
+# ১. সার্ভার কনফিগারেশন (Monkey Patching)
 import eventlet
 eventlet.monkey_patch()
 
 import os
+import datetime
 from flask import Flask, render_template_string, request
 from flask_socketio import SocketIO, emit
 from pymongo import MongoClient
 
-# --- অ্যাপ সেটআপ ---
+# --- ফ্লাস্ক অ্যাপ সেটআপ ---
 app = Flask(__name__)
-app.config['SECRET_KEY'] = 'video-call-secure-key-2026'
-# async_mode হিসেবে eventlet ব্যবহার করা হয়েছে
+app.config['SECRET_KEY'] = 'imo-secure-key-2026'
+# async_mode='eventlet' রিয়েল টাইম চ্যাটের জন্য সবচেয়ে ভালো
 socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
 
 # --- মোঙ্গোডিবি (MongoDB) কানেকশন ---
-# এখানে আপনার আসল MongoDB URI দিবেন
+# এখানে আপনার ডাটাবেস ইউআরআই দেওয়া আছে
 MONGO_URI = "mongodb+srv://Demo270:Demo270@cluster0.ls1igsg.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0" 
 
-users_collection = None
-
 try:
-    # কানেকশন করার চেষ্টা
     client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-    db = client['video_call_system']
+    db = client['imo_clone_db']
     users_collection = db['users']
-    # কানেকশন টেস্ট
+    messages_collection = db['messages']
+    # কানেকশন চেক
     client.admin.command('ping')
-    print("✅ MongoDB Connected Successfully!")
+    print("✅ MongoDB কানেক্ট হয়েছে!")
 except Exception as e:
-    print(f"❌ Database Connection Error: {e}")
+    print(f"❌ ডাটাবেস এরর: {e}")
 
-# --- ফ্রন্টএন্ড কোড (HTML/CSS/JS) ---
-html_content = """
+# --- ইউজার ইন্টারফেস (Front-end) ---
+html_template = """
 <!DOCTYPE html>
 <html lang="bn">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>প্রাইভেট ভিডিও ও অডিও কল</title>
+    <title>Imo Messenger - Call & Chat</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
     <style>
-        :root { --primary: #6c5ce7; --success: #2ed573; --danger: #ff4757; }
-        body { font-family: 'Segoe UI', sans-serif; background: #f1f2f6; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; overflow: hidden; }
+        :root { --imo-blue: #0088cc; --imo-bg: #e6ebee; --white: #ffffff; }
+        body { font-family: 'Segoe UI', sans-serif; background: var(--imo-bg); margin: 0; display: flex; justify-content: center; height: 100vh; overflow: hidden; }
         
         .hidden { display: none !important; }
+        .app-box { width: 100%; max-width: 450px; background: white; display: flex; flex-direction: column; position: relative; box-shadow: 0 0 15px rgba(0,0,0,0.2); }
         
-        .card { background: white; width: 95%; max-width: 400px; padding: 25px; border-radius: 20px; box-shadow: 0 10px 30px rgba(0,0,0,0.1); text-align: center; }
-        input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #edeff2; border-radius: 12px; font-size: 16px; box-sizing: border-box; outline: none; transition: 0.3s; }
-        input:focus { border-color: var(--primary); }
-        button { width: 100%; padding: 12px; border: none; border-radius: 12px; font-weight: bold; cursor: pointer; margin-top: 10px; color: white; font-size: 16px; }
+        /* Auth Screen */
+        .auth-card { padding: 40px 20px; text-align: center; }
+        input { width: 90%; padding: 12px; margin: 10px 0; border: 1px solid #ccc; border-radius: 8px; font-size: 16px; }
+        .btn { width: 90%; padding: 12px; border: none; border-radius: 8px; cursor: pointer; font-weight: bold; font-size: 16px; margin-top: 10px; transition: 0.3s; }
+        .btn-blue { background: var(--imo-blue); color: white; }
         
-        .btn-login { background: var(--primary); }
-        .btn-video { background: var(--success); }
-        .btn-audio { background: #1e90ff; }
-        .btn-hangup { background: var(--danger); }
+        /* Header */
+        header { background: var(--imo-blue); color: white; padding: 15px; display: flex; justify-content: space-between; align-items: center; }
         
-        .video-box { margin-top: 20px; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-        video { width: 100%; background: #000; border-radius: 12px; transform: scaleX(-1); }
+        /* Chat List */
+        #contactList { flex: 1; overflow-y: auto; }
+        .contact { padding: 15px; border-bottom: 1px solid #f0f0f0; display: flex; align-items: center; cursor: pointer; transition: 0.2s; }
+        .contact:hover { background: #f9f9f9; }
+        .avatar { width: 45px; height: 45px; background: #ddd; border-radius: 50%; margin-right: 12px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #555; }
+        .status-on { color: #2ecc71; font-size: 12px; }
+
+        /* Chat Window */
+        #chatView { position: absolute; top: 0; left: 0; width: 100%; height: 100%; background: #f4f7f9; z-index: 100; display: flex; flex-direction: column; }
+        .chat-msgs { flex: 1; padding: 15px; overflow-y: auto; display: flex; flex-direction: column; }
+        .m { margin: 5px 0; padding: 10px 14px; border-radius: 12px; max-width: 75%; font-size: 14px; word-wrap: break-word; }
+        .sent { background: #d1f2ff; align-self: flex-end; border-bottom-right-radius: 2px; }
+        .recv { background: white; align-self: flex-start; border-bottom-left-radius: 2px; box-shadow: 0 1px 2px rgba(0,0,0,0.1); }
         
-        .overlay { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.9); z-index: 9999; display: flex; flex-direction: column; align-items: center; justify-content: center; color: white; }
-        .status-dot { height: 10px; width: 10px; background-color: var(--success); border-radius: 50%; display: inline-block; margin-right: 5px; }
-        .link-text { color: var(--primary); cursor: pointer; text-decoration: underline; display: block; margin-top: 15px; font-size: 14px; }
+        .chat-footer { padding: 10px; display: flex; background: white; gap: 8px; }
+        .chat-footer input { margin: 0; border-radius: 20px; }
+        
+        /* Call Screens */
+        .call-ui { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: #1c1e21; z-index: 1000; color: white; display: flex; flex-direction: column; align-items: center; justify-content: center; }
+        .video-container { width: 90%; height: 60%; position: relative; }
+        video { width: 100%; height: 100%; object-fit: cover; border-radius: 10px; background: #000; }
+        #localVideo { width: 100px; height: 140px; position: absolute; bottom: 20px; right: 20px; border: 2px solid white; z-index: 1001; }
+        .call-btns { margin-top: 30px; display: flex; gap: 20px; }
+        .btn-hangup { background: #ff4757; border-radius: 50%; width: 60px; height: 60px; color: white; border: none; font-size: 24px; cursor: pointer; }
+        
+        .ring-pop { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); width: 90%; max-width: 400px; background: var(--imo-blue); color: white; padding: 15px; border-radius: 12px; z-index: 1100; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 5px 15px rgba(0,0,0,0.3); }
     </style>
 </head>
 <body>
 
-    <audio id="audioRing" src="https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3" loop></audio>
-    <audio id="videoRing" src="https://www.soundjay.com/phone/phone-calling-1.mp3" loop></audio>
+    <!-- রিংটোন অডিও -->
+    <audio id="callRing" src="https://assets.mixkit.co/active_storage/sfx/1359/1359-preview.mp3" loop></audio>
 
-    <!-- ১. রেজিস্ট্রেশন বক্স -->
-    <div class="card" id="registerBox">
-        <h2 style="color: var(--primary);">একাউন্ট তৈরি করুন</h2>
-        <input type="number" id="regPhone" placeholder="মোবাইল নাম্বার">
-        <input type="password" id="regPin" placeholder="৫ ডিজিটের সিক্রেট পিন" maxlength="5">
-        <button class="btn-login" onclick="registerAccount()">একাউন্ট খুলুন</button>
-        <span class="link-text" onclick="showLogin()">ইতিমধ্যে একাউন্ট আছে? লগইন করুন</span>
-    </div>
-
-    <!-- ২. লগইন বক্স -->
-    <div class="card hidden" id="loginBox">
-        <h2 style="color: var(--primary);">লগইন করুন</h2>
-        <input type="number" id="loginPhone" placeholder="মোবাইল নাম্বার">
-        <input type="password" id="loginPin" placeholder="পিন কোড দিন">
-        <button class="btn-login" onclick="login()">লগইন করুন</button>
-        <span class="link-text" onclick="showRegister()">নতুন একাউন্ট তৈরি করুন</span>
-    </div>
-
-    <!-- ৩. মেইন ড্যাশবোর্ড -->
-    <div class="card hidden" id="dashboard">
-        <div style="margin-bottom: 15px;">
-            <span class="status-dot"></span> আইডি: <b id="myIdDisplay"></b>
-        </div>
-        <input type="number" id="searchId" placeholder="বন্ধুর নাম্বার লিখুন">
-        <div style="display: flex; gap: 10px;">
-            <button class="btn-video" onclick="initiateCall('video')">ভিডিও কল</button>
-            <button class="btn-audio" onclick="initiateCall('audio')">অডিও কল</button>
+    <div class="app-box">
+        
+        <!-- ১. রেজিস্ট্রেশন ও লগইন -->
+        <div id="authScreen" class="auth-card">
+            <h1 style="color: var(--imo-blue);">Imo Lite</h1>
+            <p>আপনার ফোন নম্বর দিয়ে শুরু করুন</p>
+            <input type="number" id="phoneInput" placeholder="মোবাইল নাম্বার">
+            <input type="password" id="pinInput" placeholder="৫ ডিজিটের পিন">
+            <button class="btn btn-blue" onclick="handleAuth()">লগইন / রেজিস্ট্রেশন</button>
+            <p style="font-size: 12px; color: #777; margin-top: 20px;">একবার লগইন করলে এটি স্থায়ীভাবে থাকবে।</p>
         </div>
 
-        <div id="callInterface" class="hidden">
-            <p id="callStatus" style="font-weight: bold; margin-top: 15px; color: red;">কল চলছে...</p>
-            <div class="video-box">
-                <video id="localVideo" autoplay playsinline muted></video>
-                <video id="remoteVideo" autoplay playsinline></video>
+        <!-- ২. মেইন কন্টাক্ট লিস্ট -->
+        <div id="mainScreen" class="hidden" style="height: 100%; display: flex; flex-direction: column;">
+            <header>
+                <span>Imo</span>
+                <b id="myIdDisplay"></b>
+                <button onclick="logout()" style="background:none; border:1px solid white; color:white; font-size:10px; cursor:pointer;">Logout</button>
+            </header>
+            
+            <div style="padding: 10px;">
+                <input type="number" id="targetInput" placeholder="বন্ধুর নাম্বার লিখুন..." style="width: 100%; margin: 0; box-sizing: border-box;">
+                <button class="btn btn-blue" style="width: 100%; padding: 8px;" onclick="startNewChat()">চ্যাট শুরু করুন</button>
             </div>
-            <button class="btn-hangup" onclick="endCall()">কল কাটুন</button>
+
+            <div id="contactList">
+                <!-- কন্টাক্টরা এখানে দেখা যাবে -->
+            </div>
+        </div>
+
+        <!-- ৩. চ্যাট উইন্ডো -->
+        <div id="chatView" class="hidden">
+            <header>
+                <button onclick="closeChat()" style="background:none; border:none; color:white; font-size:20px; cursor:pointer;">←</button>
+                <span id="chatTitle">নাম্বার</span>
+                <div style="display:flex; gap:15px;">
+                    <button onclick="makeCall('video')" style="background:none; border:none; font-size:20px; cursor:pointer;">📹</button>
+                    <button onclick="makeCall('audio')" style="background:none; border:none; font-size:20px; cursor:pointer;">📞</button>
+                </div>
+            </header>
+            <div id="chatMessages" class="chat-msgs"></div>
+            <div class="chat-footer">
+                <input type="text" id="msgText" placeholder="মেসেজ লিখুন...">
+                <button class="btn-blue" style="width:60px; border-radius:20px; margin:0;" onclick="sendText()">➤</button>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- ইনকামিং কল রিসিভ পপআপ -->
+    <div id="incomingPop" class="ring-pop hidden">
+        <div>
+            <b id="callerId">017...</b><br>
+            <span>কল দিচ্ছে...</span>
+        </div>
+        <div style="display:flex; gap:10px;">
+            <button onclick="answerCall()" style="background:#2ecc71; border:none; padding:8px 15px; color:white; border-radius:5px;">রিসিভ</button>
+            <button onclick="hangup()" style="background:#e74c3c; border:none; padding:8px 15px; color:white; border-radius:5px;">কাটুন</button>
         </div>
     </div>
 
-    <!-- ৪. ইনকামিং কল পপআপ -->
-    <div id="incomingPopup" class="overlay hidden">
-        <h1 id="callerIdHead">017XXXXXXXX</h1>
-        <p id="callTypeHead">কল দিচ্ছে...</p>
-        <div style="display: flex; gap: 20px; margin-top: 20px;">
-            <button class="btn-video" style="width: 150px;" onclick="acceptCall()">রিসিভ</button>
-            <button class="btn-hangup" style="width: 150px;" onclick="endCall()">কাটুন</button>
+    <!-- ভিডিও কল স্ক্রিন -->
+    <div id="callScreen" class="call-ui hidden">
+        <div class="video-container">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <video id="localVideo" autoplay playsinline muted></video>
+        </div>
+        <div class="call-btns">
+            <button class="btn-hangup" onclick="hangup()">✖</button>
         </div>
     </div>
 
     <script>
         const socket = io();
-        let myId, localStream, peerConnection, currentOffer;
-        const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+        let myId = null;
+        let currentTarget = null;
+        let localStream, peerConn, currentSignal;
+        const rtcConf = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
-        function showLogin() {
-            document.getElementById('registerBox').classList.add('hidden');
-            document.getElementById('loginBox').classList.remove('hidden');
-        }
-        function showRegister() {
-            document.getElementById('loginBox').classList.add('hidden');
-            document.getElementById('registerBox').classList.remove('hidden');
+        // --- অটো লগইন লজিক ---
+        window.onload = () => {
+            const saved = localStorage.getItem('imo_login');
+            if (saved) {
+                const data = JSON.parse(saved);
+                socket.emit('auth_user', data);
+            }
+        };
+
+        function handleAuth() {
+            const phone = document.getElementById('phoneInput').value.trim();
+            const pin = document.getElementById('pinInput').value.trim();
+            if (phone.length < 5 || pin.length < 4) return alert("সঠিক তথ্য দিন");
+            const data = { phone, pin };
+            socket.emit('auth_user', data);
         }
 
-        function registerAccount() {
-            const phone = document.getElementById('regPhone').value.trim();
-            const pin = document.getElementById('regPin').value.trim();
-            if (phone.length < 5 || pin.length !== 5) return alert("সঠিক নাম্বার ও ৫ ডিজিটের পিন দিন");
-            socket.emit('register_new_user', { phone, pin });
-        }
-
-        socket.on('register_response', data => {
-            alert(data.message);
-            if (data.status === 'success') showLogin();
+        socket.on('auth_success', data => {
+            myId = data.phone;
+            localStorage.setItem('imo_login', JSON.stringify({ phone: data.phone, pin: data.pin }));
+            document.getElementById('authScreen').classList.add('hidden');
+            document.getElementById('mainScreen').classList.remove('hidden');
+            document.getElementById('myIdDisplay').innerText = myId;
+            socket.emit('request_contacts');
         });
 
-        function login() {
-            const phone = document.getElementById('loginPhone').value.trim();
-            const pin = document.getElementById('loginPin').value.trim();
-            if (!phone || !pin) return alert("তথ্য দিন");
-            socket.emit('login_user', { phone, pin });
+        function logout() {
+            localStorage.removeItem('imo_login');
+            location.reload();
         }
 
-        socket.on('login_response', data => {
-            if (data.status === 'success') {
-                myId = data.phone;
-                document.getElementById('loginBox').classList.add('hidden');
-                document.getElementById('dashboard').classList.remove('hidden');
-                document.getElementById('myIdDisplay').innerText = myId;
-            } else {
-                alert(data.message);
-            }
-        });
-
-        async function initiateCall(type) {
-            const target = document.getElementById('searchId').value.trim();
-            if (!target || target === myId) return alert("সঠিক নাম্বার দিন");
-
-            try {
-                localStream = await navigator.mediaDevices.getUserMedia({ video: type === 'video', audio: true });
-                document.getElementById('localVideo').srcObject = localStream;
-                document.getElementById('callInterface').classList.remove('hidden');
-
-                peerConnection = new RTCPeerConnection(rtcConfig);
-                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-
-                peerConnection.onicecandidate = e => {
-                    if (e.candidate) socket.emit('signal_data', { to: target, candidate: e.candidate, from: myId });
-                };
-                peerConnection.ontrack = e => {
-                    document.getElementById('remoteVideo').srcObject = e.streams[0];
-                };
-
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
-                socket.emit('signal_data', { to: target, offer: offer, from: myId, type: type });
-            } catch (err) {
-                alert("ক্যামেরা বা মাইক্রোফোন এক্সেস দিন!");
-            }
+        // --- চ্যাট লজিক ---
+        function startNewChat() {
+            const target = document.getElementById('targetInput').value.trim();
+            if (target) openChat(target);
         }
 
-        socket.on('signal_data', async (data) => {
-            if (data.offer) {
-                currentOffer = data;
-                document.getElementById('callerIdHead').innerText = data.from;
-                document.getElementById('callTypeHead').innerText = data.type === 'video' ? "ভিডিও কল দিচ্ছে..." : "অডিও কল দিচ্ছে...";
-                document.getElementById('incomingPopup').classList.remove('hidden');
-                document.getElementById(data.type === 'video' ? 'videoRing' : 'audioRing').play();
-            } else if (data.answer) {
-                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.answer));
-            } else if (data.candidate) {
-                try { await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
-            }
+        function openChat(phone) {
+            currentTarget = phone;
+            document.getElementById('chatTitle').innerText = phone;
+            document.getElementById('chatView').classList.remove('hidden');
+            document.getElementById('chatMessages').innerHTML = "";
+            socket.emit('load_history', { from: myId, to: phone });
+        }
+
+        function closeChat() {
+            document.getElementById('chatView').classList.add('hidden');
+            currentTarget = null;
+        }
+
+        function sendText() {
+            const txt = document.getElementById('msgText').value.trim();
+            if (!txt) return;
+            const data = { from: myId, to: currentTarget, msg: txt };
+            socket.emit('private_msg', data);
+            addMsg(data, 'sent');
+            document.getElementById('msgText').value = "";
+        }
+
+        socket.on('new_msg', data => {
+            if (currentTarget === data.from) addMsg(data, 'recv');
+            else alert("মেসেজ পাঠিয়েছে: " + data.from);
         });
 
-        async function acceptCall() {
-            document.getElementById('videoRing').pause();
-            document.getElementById('audioRing').pause();
-            document.getElementById('incomingPopup').classList.add('hidden');
-            document.getElementById('callInterface').classList.remove('hidden');
+        socket.on('history_data', msgs => {
+            msgs.forEach(m => addMsg(m, m.from === myId ? 'sent' : 'recv'));
+        });
 
-            localStream = await navigator.mediaDevices.getUserMedia({ video: currentOffer.type === 'video', audio: true });
+        function addMsg(data, type) {
+            const box = document.getElementById('chatMessages');
+            const d = document.createElement('div');
+            d.className = `m ${type}`;
+            d.innerText = data.msg;
+            box.appendChild(d);
+            box.scrollTop = box.scrollHeight;
+        }
+
+        // --- ভিডিও/অডিও কল (WebRTC) ---
+        async function makeCall(type) {
+            document.getElementById('callScreen').classList.remove('hidden');
+            localStream = await navigator.mediaDevices.getUserMedia({ video: type === 'video', audio: true });
             document.getElementById('localVideo').srcObject = localStream;
 
-            peerConnection = new RTCPeerConnection(rtcConfig);
-            localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            peerConn = new RTCPeerConnection(rtcConf);
+            localStream.getTracks().forEach(t => peerConn.addTrack(t, localStream));
 
-            peerConnection.onicecandidate = e => {
-                if (e.candidate) socket.emit('signal_data', { to: currentOffer.from, candidate: e.candidate, from: myId });
+            peerConn.onicecandidate = e => {
+                if (e.candidate) socket.emit('call_signal', { to: currentTarget, candidate: e.candidate, from: myId });
             };
-            peerConnection.ontrack = e => {
+            peerConn.ontrack = e => {
                 document.getElementById('remoteVideo').srcObject = e.streams[0];
             };
 
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(currentOffer.offer));
-            const answer = await peerConnection.createAnswer();
-            await peerConnection.setLocalDescription(answer);
-            socket.emit('signal_data', { to: currentOffer.from, answer: answer, from: myId });
+            const offer = await peerConn.createOffer();
+            await peerConn.setLocalDescription(offer);
+            socket.emit('call_signal', { to: currentTarget, offer: offer, from: myId, type: type });
         }
 
-        function endCall() { location.reload(); }
-        socket.on('error_msg', msg => alert(msg));
+        socket.on('call_signal', async data => {
+            if (data.offer) {
+                currentSignal = data;
+                document.getElementById('callerId').innerText = data.from;
+                document.getElementById('incomingPop').classList.remove('hidden');
+                document.getElementById('callRing').play();
+            } else if (data.answer) {
+                await peerConn.setRemoteDescription(new RTCSessionDescription(data.answer));
+            } else if (data.candidate) {
+                try { await peerConn.addIceCandidate(new RTCIceCandidate(data.candidate)); } catch(e) {}
+            }
+        });
+
+        async function answerCall() {
+            document.getElementById('callRing').pause();
+            document.getElementById('incomingPop').classList.add('hidden');
+            document.getElementById('callScreen').classList.remove('hidden');
+
+            localStream = await navigator.mediaDevices.getUserMedia({ video: currentSignal.type === 'video', audio: true });
+            document.getElementById('localVideo').srcObject = localStream;
+
+            peerConn = new RTCPeerConnection(rtcConf);
+            localStream.getTracks().forEach(t => peerConn.addTrack(t, localStream));
+
+            peerConn.onicecandidate = e => {
+                if (e.candidate) socket.emit('call_signal', { to: currentSignal.from, candidate: e.candidate, from: myId });
+            };
+            peerConn.ontrack = e => {
+                document.getElementById('remoteVideo').srcObject = e.streams[0];
+            };
+
+            await peerConn.setRemoteDescription(new RTCSessionDescription(currentSignal.offer));
+            const ans = await peerConn.createAnswer();
+            await peerConn.setLocalDescription(ans);
+            socket.emit('call_signal', { to: currentSignal.from, answer: ans, from: myId });
+        }
+
+        function hangup() {
+            location.reload();
+        }
+
+        // কন্টাক্ট লিস্ট আপডেট
+        socket.on('update_contacts', users => {
+            const list = document.getElementById('contactList');
+            list.innerHTML = "";
+            users.forEach(u => {
+                if (u.phone === myId) return;
+                const div = document.createElement('div');
+                div.className = 'contact';
+                div.innerHTML = `<div class="avatar">${u.phone[0]}</div> <div><b>${u.phone}</b><br><span class="status-on">${u.status}</span></div>`;
+                div.onclick = () => openChat(u.phone);
+                list.appendChild(div);
+            });
+        });
     </script>
 </body>
 </html>
 """
 
 @app.route('/')
-def home():
-    return render_template_string(html_content)
+def index():
+    return render_template_string(html_template)
 
-# --- ব্যাকএন্ড সকেট লজিক ---
+# --- ব্যাকএন্ড সকেট লজিক (Backend Logic) ---
 
-@socketio.on('register_new_user')
-def register_new_user(data):
-    if users_collection is None:
-        emit('register_response', {'status': 'error', 'message': 'ডেটাবেস সংযুক্ত নয়!'})
-        return
+@socketio.on('auth_user')
+def auth_user(data):
     phone = str(data.get('phone'))
     pin = str(data.get('pin'))
-    try:
-        existing_user = users_collection.find_one({"phone": phone})
-        if existing_user:
-            emit('register_response', {'status': 'error', 'message': 'এই নাম্বার ইতিমধ্যে আছে!'})
+    user = users_collection.find_one({"phone": phone})
+    
+    if user:
+        if user['pin'] == pin:
+            users_collection.update_one({"phone": phone}, {"$set": {"status": "online", "sid": request.sid}})
         else:
-            users_collection.insert_one({"phone": phone, "pin": pin, "socket_id": request.sid, "status": "offline"})
-            emit('register_response', {'status': 'success', 'message': 'একাউন্ট তৈরি সফল! লগইন করুন।'})
-    except Exception as e:
-        emit('register_response', {'status': 'error', 'message': 'সার্ভার সমস্যা!'})
-
-@socketio.on('login_user')
-def login_user(data):
-    if users_collection is None:
-        return
-    phone = str(data.get('phone'))
-    pin = str(data.get('pin'))
-    try:
-        user = users_collection.find_one({"phone": phone, "pin": pin})
-        if user:
-            users_collection.update_one({"phone": phone}, {"$set": {"socket_id": request.sid, "status": "online"}})
-            emit('login_response', {'status': 'success', 'phone': phone})
-        else:
-            emit('login_response', {'status': 'error', 'message': 'ভুল নাম্বার বা পিন!'})
-    except Exception as e:
-        print(f"Login Error: {e}")
-
-@socketio.on('signal_data')
-def signal(data):
-    if users_collection is None: return
-    target_phone = str(data.get('to'))
-    user = users_collection.find_one({"phone": target_phone})
-    if user and user['status'] == 'online':
-        emit('signal_data', data, room=user['socket_id'])
+            emit('error', 'ভুল পিন!')
+            return
     else:
-        emit('error_msg', "ইউজার অফলাইন!", room=request.sid)
+        # নতুন ইউজার হলে একাউন্ট খুলে দেওয়া
+        users_collection.insert_one({"phone": phone, "pin": pin, "status": "online", "sid": request.sid})
+    
+    emit('auth_success', {'phone': phone, 'pin': pin})
+    send_contact_updates()
 
-# ডিসকানেক্ট ফাংশন ফিক্স করা হয়েছে (আর্গুমেন্ট গ্রহণ করার জন্য)
+@socketio.on('load_history')
+def load_history(data):
+    history = list(messages_collection.find({
+        "$or": [
+            {"from": data['from'], "to": data['to']},
+            {"from": data['to'], "to": data['from']}
+        ]
+    }, {"_id": 0}).sort("_id", 1))
+    emit('history_data', history)
+
+@socketio.on('private_msg')
+def private_msg(data):
+    messages_collection.insert_one({
+        "from": data['from'],
+        "to": data['to'],
+        "msg": data['msg'],
+        "time": datetime.datetime.now()
+    })
+    target = users_collection.find_one({"phone": data['to']})
+    if target and target['status'] == 'online':
+        emit('new_msg', data, room=target['sid'])
+
+@socketio.on('call_signal')
+def call_signal(data):
+    target = users_collection.find_one({"phone": data['to']})
+    if target and target['status'] == 'online':
+        emit('call_signal', data, room=target['sid'])
+
+@socketio.on('request_contacts')
+def request_contacts():
+    send_contact_updates()
+
+def send_contact_updates():
+    users = list(users_collection.find({}, {"_id": 0, "phone": 1, "status": 1}))
+    socketio.emit('update_contacts', users)
+
 @socketio.on('disconnect')
-def disconnect(*args):
-    # 'if users_collection:' এর পরিবর্তে 'is not None' চেক করা হয়েছে
-    if users_collection is not None:
-        users_collection.update_one({"socket_id": request.sid}, {"$set": {"status": "offline"}})
+def on_disconnect():
+    users_collection.update_one({"sid": request.sid}, {"$set": {"status": "offline"}})
+    send_contact_updates()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
