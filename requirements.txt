@@ -1,6 +1,3 @@
-pyrogram
-tgcrypto
-google-api-python-client
-google-auth-oauthlib
-flask
-requests
+python-telegram-bot
+pymongo
+dnspython
