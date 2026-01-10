@@ -1,113 +1,182 @@
 import os
-import pickle
-import threading
-from flask import Flask, request, Response
-from pyrogram import Client, filters
-from googleapiclient.discovery import build
-from google.auth.transport.requests import Request
+import logging
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    filters,
+    ConversationHandler,
+    ContextTypes,
+)
+from pymongo import MongoClient
 
-# --- কনফিগারেশন (Render Environment Variables থেকে আসবে) ---
-API_ID = int(os.getenv("API_ID", "0"))
-API_HASH = os.getenv("API_HASH", "")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-BLOG_ID = os.getenv("BLOG_ID", "")
-BASE_URL = os.getenv("BASE_URL", "") # উদা: https://your-app.onrender.com
-PORT = int(os.getenv("PORT", 10000))
+# Logging setup
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# --- ১. ফ্লাস্ক ওয়েব সার্ভার সেটআপ (Render-এর জন্য) ---
-web_app = Flask(__name__)
+# Environment Variables (রেন্ডারে এগুলো সেট করবেন)
+TOKEN = os.getenv("BOT_TOKEN")
+MONGO_URI = os.getenv("MONGO_URI")
 
-@web_app.route('/')
-def home():
-    return "🔥 Bot is Live and Server is Running!"
+# MongoDB Connection
+client = MongoClient(MONGO_URI)
+db = client['telegram_post_bot']
+users_col = db['users_data']
 
-# ভিডিও স্ট্রিমিং রুট (এটি সরাসরি ভিডিও লিঙ্ক হিসেবে কাজ করবে)
-@web_app.route('/stream/<int:message_id>')
-def stream_video(message_id):
-    # এটি একটি ডিরেক্ট লিঙ্ক জেনারেটর লজিক (কনসেপ্ট)
-    # রেন্ডারে সরাসরি ফাইল স্ট্রিমিং করতে হলে ফাইলটি ডাউনলোড করতে হয়
-    # যা ফ্রি টায়ারে সম্ভব না হতে পারে। তবে এটি ব্লগারে প্লেয়ার লোড করতে সাহায্য করবে।
-    return Response(f"Streaming link for message {message_id} is active.", mimetype='text/plain')
+# States for Conversations
+POSTER, VIDEO_LINK = range(2)
+CAP_NAME, CAP_LINK = range(2, 4)
+DATE_INPUT = 4
 
-def run_flask():
-    web_app.run(host='0.0.0.0', port=PORT)
+# --- Helper Functions ---
+def get_user_data(user_id):
+    data = users_col.find_one({"user_id": user_id})
+    if not data:
+        return {"user_id": user_id, "buttons": [], "date": "সেট করা নেই"}
+    return data
 
-# --- ২. ব্লগার এপিআই লজিক ---
-def get_blogger_service():
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        return build('blogger', 'v3', credentials=creds)
-    return None
+def update_user_data(user_id, update_query):
+    users_col.update_one({"user_id": user_id}, update_query, upsert=True)
 
-def post_to_blogger(title, stream_url):
-    service = get_blogger_service()
-    if not service:
-        return None
+# --- Start Command ---
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "স্বাগতম! নিচের কমান্ডগুলো ব্যবহার করুন:\n"
+        "/post - নতুন পোস্ট তৈরি করতে\n"
+        "/setdate - তারিখ সেট করতে\n"
+        "/setcap - ফুটার বাটন যোগ করতে\n"
+        "/resetcap - সব বাটন মুছে ফেলতে"
+    )
 
-    # অ্যাড-ফ্রি আধুনিক প্লেয়ার (Plyr.io)
-    content = f"""
-    <link rel="stylesheet" href="https://cdn.plyr.io/3.7.8/plyr.css" />
-    <div style="width: 100%; max-width: 800px; margin: auto;">
-        <video id="player" playsinline controls style="width:100%; border-radius: 8px;">
-            <source src="{stream_url}" type="video/mp4" />
-        </video>
-    </div>
-    <script src="https://cdn.plyr.io/3.7.8/plyr.js"></script>
-    <script>const player = new Plyr('#player');</script>
-    <br>
-    <p style="text-align:center;">ভিডিওটি আমাদের সাইটে অ্যাড-ফ্রি দেখুন।</p>
-    """
+# --- /setdate Command ---
+async def start_setdate(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("আজকের তারিখটি লিখুন (যেমন: ১০ জানুয়ারি ২০২৬):")
+    return DATE_INPUT
 
-    data = {
-        'kind': 'blogger#post',
-        'title': title,
-        'content': content
-    }
+async def save_date(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    date_text = update.message.text
+    update_user_data(user_id, {"$set": {"date": date_text}})
+    await update.message.reply_text(f"✅ তারিখ সেট হয়েছে: {date_text}")
+    return ConversationHandler.END
+
+# --- /setcap Command ---
+async def start_setcap(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("বাটনের নাম দিন (যেমন: Join Channel):")
+    return CAP_NAME
+
+async def get_cap_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['temp_btn_name'] = update.message.text
+    await update.message.reply_text("এবার চ্যানেল বা গ্রুপের লিঙ্ক দিন:")
+    return CAP_LINK
+
+async def save_cap(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    name = context.user_data['temp_btn_name']
+    url = update.message.text
     
-    try:
-        posts = service.posts()
-        request = posts.insert(blogId=BLOG_ID, body=data)
-        response = request.execute()
-        return response['url']
-    except Exception as e:
-        print(f"Blogger Post Error: {e}")
-        return None
+    if not url.startswith("http"):
+        await update.message.reply_text("❌ ভুল লিঙ্ক! দয়া করে সঠিক লিঙ্ক দিন।")
+        return CAP_LINK
 
-# --- ৩. টেলিগ্রাম বট লজিক (Pyrogram) ---
-bot = Client("my_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+    update_user_data(user_id, {"$push": {"buttons": {"text": name, "url": url}}})
+    await update.message.reply_text(f"✅ বাটন '{name}' সেভ হয়েছে। আপনি চাইলে আরও বাটন যোগ করতে পারেন।")
+    return ConversationHandler.END
 
-@bot.on_message(filters.video | filters.document)
-async def video_handler(client, message):
-    if message.video or (message.document and "video" in message.document.mime_type):
-        status_msg = await message.reply("⚡ ভিডিওটি প্রসেস হচ্ছে... ব্লগারে পোস্ট করা হচ্ছে।")
-        
-        # ফাইলের নাম ঠিক করা
-        file_name = message.video.file_name if message.video else message.document.file_name
-        if not file_name:
-            file_name = "New_Video_Upload"
+# --- /post Command ---
+async def start_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("আপনার পোস্টার (ছবি) টি পাঠান:")
+    return POSTER
 
-        # ডাইরেক্ট লিঙ্ক তৈরি (এটি আপনার সার্ভারের লিঙ্ক)
-        # রেন্ডারে সরাসরি বড় ভিডিও ফাইল স্ট্রিম করা কঠিন, তাই আমরা একটি পাবলিক ফাস্ট-স্ট্রীম লিঙ্ক তৈরি করার মেকানিজম ব্যবহার করি
-        # তবে আপাতত আপনার নিজের সার্ভার ইউআরএল ব্যবহার করছি
-        direct_stream_url = f"{BASE_URL}/stream/{message.id}"
+async def get_poster(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['poster_id'] = update.message.photo[-1].file_id
+    await update.message.reply_text("ধন্যবাদ! এবার ভিডিওর লিঙ্কটি দিন:")
+    return VIDEO_LINK
 
-        # ব্লগারে পোস্ট করা
-        blog_url = post_to_blogger(file_name, direct_stream_url)
+async def finalize_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    v_link = update.message.text
+    p_id = context.user_data['poster_id']
+    
+    # DB থেকে ডাটা আনা
+    user_data = get_user_data(user_id)
+    saved_date = user_data.get('date', 'সেট করা নেই')
+    buttons = user_data.get('buttons', [])
+    
+    # পোস্টের ক্যাপশন সাজানো
+    caption = (
+        f"📅 তারিখ: {saved_date}\n\n"
+        "🎬 **নতুন ভিডিও আপডেট** 🎬\n\n"
+        f"🔗 ভিডিও লিঙ্ক: {v_link}\n\n"
+        "সবাই লিংকে ক্লিক করে ভিডিওটি দেখে নিন!"
+    )
+    
+    # বাটন সাজানো
+    keyboard = [[InlineKeyboardButton(b['text'], url=b['url'])] for b in buttons]
+    reply_markup = InlineKeyboardMarkup(keyboard) if keyboard else None
 
-        if blog_url:
-            await status_msg.edit(f"✅ সফলভাবে পোস্ট হয়েছে!\n\n🔗 **ব্লগ লিঙ্ক:** {blog_url}\n\n🎬 **ভিডিও লিঙ্ক:** {direct_stream_url}")
-        else:
-            await status_msg.edit("❌ ব্লগার পোস্ট করতে সমস্যা হয়েছে। token.pickle ফাইলটি চেক করুন।")
-    else:
-        await message.reply("দয়া করে একটি ভিডিও ফাইল পাঠান।")
+    await update.message.reply_photo(
+        photo=p_id,
+        caption=caption,
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
 
-# --- ৪. মেইন ফাংশন ---
+# --- Cancel/Reset ---
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("অপারেশন বাতিল করা হয়েছে।")
+    return ConversationHandler.END
+
+async def reset_cap(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    update_user_data(update.effective_user.id, {"$set": {"buttons": []}})
+    await update.message.reply_text("✅ আপনার সব বাটন মুছে ফেলা হয়েছে।")
+
+# --- Main Function ---
+def main():
+    if not TOKEN or not MONGO_URI:
+        print("Error: BOT_TOKEN বা MONGO_URI সেট করা হয়নি!")
+        return
+
+    application = Application.builder().token(TOKEN).build()
+
+    # /post Handler
+    post_conv = ConversationHandler(
+        entry_points=[CommandHandler("post", start_post)],
+        states={
+            POSTER: [MessageHandler(filters.PHOTO, get_poster)],
+            VIDEO_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, finalize_post)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    # /setcap Handler
+    cap_conv = ConversationHandler(
+        entry_points=[CommandHandler("setcap", start_setcap)],
+        states={
+            CAP_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_cap_name)],
+            CAP_LINK: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_cap)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    # /setdate Handler
+    date_conv = ConversationHandler(
+        entry_points=[CommandHandler("setdate", start_setdate)],
+        states={
+            DATE_INPUT: [MessageHandler(filters.TEXT & ~filters.COMMAND, save_date)],
+        },
+        fallbacks=[CommandHandler("cancel", cancel)],
+    )
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("resetcap", reset_cap))
+    application.add_handler(post_conv)
+    application.add_handler(cap_conv)
+    application.add_handler(date_conv)
+
+    print("বট চলছে...")
+    application.run_polling()
+
 if __name__ == "__main__":
-    # Flask সার্ভারকে আলাদা থ্রেডে চালানো
-    threading.Thread(target=run_flask, daemon=True).start()
-    
-    print("Bot is starting...")
-    bot.run()
+    main()
